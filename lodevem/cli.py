@@ -313,7 +313,7 @@ examples:
     start_parser.add_argument(
         "--output",
         metavar="PATH",
-        help="Save CSV results to this path (default: results/benchmark_<timestamp>.csv)",
+        help="Save CSV results to this path (default: ./results/benchmark_<timestamp>.csv)",
     )
     start_parser.set_defaults(func=cmd_start)
 

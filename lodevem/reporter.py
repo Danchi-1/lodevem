@@ -31,8 +31,8 @@ from rich import box
 
 logger = logging.getLogger(__name__)
 
-# Path where results are saved
-RESULTS_DIR = Path(__file__).parent.parent / "results"
+# Path where results are saved (defaults to ./results in current working directory)
+RESULTS_DIR = Path.cwd() / "results"
 
 console = Console()
 
