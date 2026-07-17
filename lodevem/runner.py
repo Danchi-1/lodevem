@@ -33,7 +33,7 @@ from rich.progress import (
 )
 
 from lodevem import profiles as profile_loader
-from lodevem.measure import build_image, measure_memory
+from lodevem.measure import build_image, measure_memory, _docker_available
 from lodevem.predict import load_model, predict_latency, get_model_size_mb
 from lodevem.profiles import DeviceProfile
 
@@ -74,10 +74,11 @@ def run_benchmark(
     logger.info(f"Benchmarking {len(model_paths)} model(s) against {len(device_profiles)} profile(s)")
     logger.info(f"Total runs: {len(model_paths) * len(device_profiles)}")
 
-    # --- Build the Docker image once before starting ---
-    # This is cached after the first run so it's fast on subsequent calls.
-    logger.info("Ensuring Docker image is ready...")
-    build_image()
+    # --- Build Docker image if Docker is available ---
+    # Only runs in full mode. In lite mode (Kaggle, no Docker), this is skipped.
+    if _docker_available():
+        logger.info("Ensuring Docker image is ready...")
+        build_image()
 
     results = []
     total_runs = len(model_paths) * len(device_profiles)
