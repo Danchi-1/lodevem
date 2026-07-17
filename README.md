@@ -1,6 +1,6 @@
 # lodevem
 
-> **Lo**w-resource **De**vice **V**irtual **Em**ulator — A benchmarking harness for evaluating compressed PyTorch models against simulated low-cost Android device profiles, without requiring physical target hardware.
+> **Lo**w-resource **De**vice **V**irtual **Em**ulator — A benchmarking harness for evaluating PyTorch models against simulated low-cost Android device profiles, without requiring physical target hardware.
 
 ---
 
@@ -11,7 +11,8 @@ Deploying machine learning models to low-resource Android devices (e.g., entry-l
 `lodevem` solves this by combining:
 - **nn-Meter** (peer-reviewed, Microsoft Research) for kernel-level latency prediction on target mobile SoCs
 - **Docker + cgroups v2** for real RAM-constrained memory measurement and OOM detection
-- A reproducible compression pipeline (FP32 → FP16 → INT8 → pruned) applied to your PyTorch model
+
+**lodevem does not compress your model.** You bring your model variants (FP32, INT8, pruned — whatever compression you've already applied). lodevem's only job is to benchmark them against each device profile and report the results.
 
 The result is a complete, reproducible benchmarking report — suitable for inclusion in academic papers — generated entirely without physical target hardware.
 
@@ -20,30 +21,32 @@ The result is a complete, reproducible benchmarking report — suitable for incl
 ## How It Works
 
 ```
-Your PyTorch model
-      │
-      ▼
-┌─────────────────────────────┐
-│   Compression Pipeline      │
-│  FP32 → FP16 → INT8 → Pruned│
-└─────────────┬───────────────┘
-              │
-      ┌───────┴────────┐
-      ▼                ▼
-┌──────────────┐  ┌────────────────────────┐
-│  nn-Meter    │  │  Docker + cgroups v2   │
-│  Latency     │  │  RAM-constrained       │
-│  Prediction  │  │  Memory Measurement    │
-│  (per device │  │  + OOM Detection       │
-│   SoC)       │  │  (per device profile)  │
-└──────┬───────┘  └──────────┬─────────────┘
-       └──────────┬──────────┘
-                  ▼
-        ┌─────────────────┐
-        │  Results Table  │
-        │  (console, CSV, │
-        │   LaTeX-ready)  │
-        └─────────────────┘
+You provide your model files (already compressed however you like)
+e.g.  cocoa_fp32.pt   cocoa_int8.pt   cocoa_pruned.pt
+                       │
+                       ▼
+             ┌─────────────────┐
+             │    lodevem      │
+             │   (benchmarks   │
+             │   each model)   │
+             └────────┬────────┘
+                      │
+             ┌────────┴─────────┐
+             ▼                  ▼
+  ┌──────────────────┐  ┌────────────────────────┐
+  │   nn-Meter       │  │  Docker + cgroups v2   │
+  │   Latency        │  │  RAM-constrained       │
+  │   Prediction     │  │  Memory Measurement    │
+  │   (per device    │  │  + OOM Detection       │
+  │    SoC profile)  │  │  (per device profile)  │
+  └────────┬─────────┘  └──────────┬─────────────┘
+           └────────────┬──────────┘
+                        ▼
+              ┌─────────────────┐
+              │  Results Table  │
+              │  (console, CSV, │
+              │   LaTeX-ready)  │
+              └─────────────────┘
 ```
 
 ---
@@ -111,15 +114,18 @@ Each benchmark run tests the same model across four compression levels:
 Running `lodevem` produces a results table like this:
 
 ```
-Device Profile     | Compression | Latency (ms) | Peak RAM (MB) | Fits in RAM | Accuracy (%)
--------------------|-------------|--------------|---------------|-------------|-------------
-Tecno Spark 8      | FP32        | 847          | 42.3          | ✓           | 94.1
-Tecno Spark 8      | FP16        | 791          | 21.8          | ✓           | 94.1
-Tecno Spark 8      | INT8        | 312          | 11.2          | ✓           | 93.4
-Tecno Spark 8      | Pruned-50%  | 480          | 22.1          | ✓           | 92.8
-Itel A70           | FP32        | 1021         | 42.3          | ✓           | 94.1
+Model File         | Device Profile     | Latency (ms) | Peak RAM (MB) | Fits in RAM
+-------------------|--------------------|--------------|---------------|------------
+cocoa_fp32.pt      | Tecno Spark 8      | 847          | 42.3          | ✓
+cocoa_fp32.pt      | Itel A70           | 1021         | 42.3          | ✓
+cocoa_fp32.pt      | Nokia C1 (Go)      | 2389         | 42.3          | ✓
+cocoa_fp32.pt      | JioPhone 2 (KaiOS) | OOM          | —             | ✗
+cocoa_int8.pt      | Tecno Spark 8      | 312          | 11.2          | ✓
+cocoa_int8.pt      | JioPhone 2 (KaiOS) | 1950         | 11.2          | ✓
 ...
 ```
+
+You label each model file yourself — the filename is used as the identifier in the output table.
 
 Results are saved as:
 - `results/benchmark_results.csv` — machine-readable
@@ -135,36 +141,31 @@ lodevem/
 ├── README.md
 ├── pyproject.toml              # Package config + 'lodevem' CLI entrypoint
 ├── requirements.txt
-├── Dockerfile                  # ARM-constrained benchmark container
-├── docker-compose.yml          # Orchestrates profile runs
+├── Dockerfile                  # Memory-constrained benchmark container
 │
 ├── profiles/                   # Device profile definitions (YAML)
-│   ├── tier1/                  # Budget Android
+│   ├── tier1/                  # Budget Android (2–4 GB RAM)
 │   │   ├── tecno_spark8.yaml
 │   │   ├── itel_a70.yaml
-│   │   ├── samsung_a03.yaml
 │   │   └── ...
-│   ├── tier2/                  # Android Go
+│   ├── tier2/                  # Android Go (512 MB – 2 GB RAM)
 │   │   ├── nokia_c1.yaml
-│   │   ├── tecno_pop5_go.yaml
 │   │   └── ...
-│   ├── tier3/                  # KaiOS / feature phones
+│   ├── tier3/                  # KaiOS / feature phones (256–512 MB RAM)
 │   │   ├── nokia_8110_4g.yaml
-│   │   ├── jiophone2.yaml
 │   │   └── ...
 │   └── custom_template.yaml
 │
 ├── lodevem/                    # Core Python package
 │   ├── __init__.py
 │   ├── cli.py                  # CLI entrypoint ('lodevem start', 'lodevem list', etc.)
-│   ├── compress.py             # Compression pipeline (FP32→FP16→INT8→pruned)
-│   ├── measure.py              # Memory + latency measurement inside container
+│   ├── measure.py              # Runs inference inside Docker, measures peak RAM
 │   ├── predict.py              # nn-Meter latency prediction wrapper
-│   ├── runner.py               # Orchestrates Docker containers per profile
-│   ├── reporter.py             # Table generation (console, CSV, JSON)
-│   └── profiles.py             # Profile loader and validator
+│   ├── runner.py               # Loops over all (model × profile) combinations
+│   ├── reporter.py             # Formats and saves the results table
+│   └── profiles.py             # Loads and validates the YAML profile files
 │
-├── models/                     # Place your .pt model file here
+├── models/                     # Drop your .pt model files here
 │   └── .gitkeep
 │
 └── results/                    # Benchmark output (auto-generated)
@@ -222,41 +223,44 @@ stat -fc %T /sys/fs/cgroup/
 
 After `pip install -e .`, the `lodevem` command becomes available globally in your environment.
 
-### Start a full benchmark run
+### Benchmark one model across all device profiles
 
 ```bash
-lodevem start --model models/your_model.pt
+lodevem start --model models/cocoa_int8.pt
 ```
 
-This single command auto-detects your Docker setup, loads all device profiles, runs the compression pipeline, and prints the results table.
+### Benchmark multiple models at once (compare your variants side by side)
+
+```bash
+lodevem start \
+  models/cocoa_fp32.pt \
+  models/cocoa_int8.pt \
+  models/cocoa_pruned.pt
+```
+
+The filename is used as the label in the results table — no extra flags needed.
 
 ### Target a specific device tier
 
 ```bash
-lodevem start --model models/your_model.pt --tier tier2        # Android Go only
-lodevem start --model models/your_model.pt --tier tier3        # KaiOS / feature phones
+lodevem start models/cocoa_int8.pt --tier tier2       # Android Go only
+lodevem start models/cocoa_int8.pt --tier tier3       # KaiOS / feature phones
 ```
 
-### Target a single device
+### Target a single device profile
 
 ```bash
-lodevem start --model models/your_model.pt --profile nokia_c1
-```
-
-### Limit to specific compression levels
-
-```bash
-lodevem start --model models/your_model.pt --levels fp32 int8
+lodevem start models/cocoa_int8.pt --profile nokia_c1
 ```
 
 ### List all available device profiles
 
 ```bash
 lodevem list
-lodevem list --tier tier3        # Filter by tier
+lodevem list --tier tier3
 ```
 
-### Check system readiness (Docker, cgroups v2)
+### Check system readiness (Docker, cgroups v2, nn-Meter)
 
 ```bash
 lodevem check
@@ -265,17 +269,16 @@ lodevem check
 ### All options
 
 ```
-lodevem start  --model PATH        Path to your .pt model file (required)
-               --profile ID        Run a single device profile
-               --tier TIER         Run all profiles in a tier (tier1 | tier2 | tier3)
-               --levels LEVELS     Compression levels: fp32 fp16 int8 pruned (default: all)
+lodevem start  MODEL [MODEL ...]   One or more .pt model files to benchmark
+               --profile ID        Run against a single device profile
+               --tier TIER         Run against a full tier (tier1 | tier2 | tier3)
                --warmup N          Warmup passes before timing (default: 5)
                --runs N            Timed inference passes (default: 50)
-               --output PATH       Save CSV results to this path
+               --output PATH       Save CSV results to this path (default: results/)
 
 lodevem list   [--tier TIER]       List all available device profiles
-lodevem check                      Verify Docker, cgroups v2, and nn-Meter setup
-lodevem --help                     Show this help message
+lodevem check                      Verify Docker, cgroups v2, and nn-Meter are ready
+lodevem --help                     Show help
 ```
 
 ---
