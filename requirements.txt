@@ -3,18 +3,21 @@ torch>=2.0
 torchvision>=0.15
 numpy>=1.24
 
-# Latency prediction (Microsoft Research tool)
+# Latency prediction (Microsoft Research)
 nn-meter>=1.4
 
-# Docker control from Python
-# This lets measure.py spin up/tear down containers programmatically
-docker>=7.0
+# Memory measurement — works without Docker (Kaggle, Colab, etc.)
+psutil>=5.9
 
 # Device profile files
 pyyaml>=6.0
 
-# Pretty terminal output (colored tables)
+# Pretty terminal output
 rich>=13.0
 
 # Results handling
 pandas>=2.0
+
+# Docker control (optional — only needed for full OOM detection mode)
+# Install with: pip install lodevem[docker]
+# docker>=7.0

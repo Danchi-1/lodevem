@@ -1,0 +1,12 @@
+id: nokia_2720_flip
+name: "Nokia 2720 Flip"
+tier: 3
+os: "KaiOS 2.5"
+chipset: "Qualcomm Snapdragon 205"
+core_type: "Cortex-A7"
+cores: 2
+clock_ghz: 1.1
+ram_mb: 512
+nn_meter_predictor: "cortexA76cpu_tflite21"
+scaling_factor: 7.0
+notes: "Flip-style KaiOS phone — 512MB RAM, same hardware class as JioPhone 2"

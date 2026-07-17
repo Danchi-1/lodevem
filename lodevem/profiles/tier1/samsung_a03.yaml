@@ -1,0 +1,11 @@
+id: samsung_a03
+name: "Samsung Galaxy A03"
+tier: 1
+chipset: "Unisoc T606"
+core_type: "Cortex-A75 + Cortex-A55"
+cores: 8
+clock_ghz: 1.6
+ram_mb: 3072
+nn_meter_predictor: "cortexA76cpu_tflite21"
+scaling_factor: 1.4
+notes: "Mid-budget, big.LITTLE architecture — 2x A75 performance cores + 6x A55 efficiency cores"

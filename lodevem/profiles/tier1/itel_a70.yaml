@@ -1,0 +1,11 @@
+id: itel_a70
+name: "Itel A70"
+tier: 1
+chipset: "Unisoc SC9863A"
+core_type: "Cortex-A55"
+cores: 4
+clock_ghz: 1.6
+ram_mb: 2048
+nn_meter_predictor: "cortexA76cpu_tflite21"
+scaling_factor: 2.2
+notes: "Ultra-budget segment, extremely common in Nigeria and Ghana"

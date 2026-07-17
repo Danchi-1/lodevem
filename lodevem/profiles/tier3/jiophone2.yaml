@@ -1,0 +1,14 @@
+id: jiophone2
+name: "JioPhone 2"
+tier: 3
+os: "KaiOS 2.5"
+chipset: "Qualcomm Snapdragon 205"
+core_type: "Cortex-A7"
+cores: 2
+clock_ghz: 1.1
+ram_mb: 512
+nn_meter_predictor: "cortexA76cpu_tflite21"
+scaling_factor: 7.0
+notes: >
+  KaiOS feature phone with 512MB. Very widely deployed in India and parts of Africa.
+  INT8 quantized models may fit; FP32 will OOM.

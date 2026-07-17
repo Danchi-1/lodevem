@@ -1,0 +1,20 @@
+# =============================================================
+# DEVICE PROFILE — Tier 1 (Budget Android, 2–4 GB RAM)
+# =============================================================
+# About scaling_factor:
+#   nn-Meter's CPU predictor is trained on Cortex-A76 measurements.
+#   The A53 is roughly 2.8x slower than the A76 at the same task.
+#   Source: ARM's own performance benchmark data + Anandtech analysis.
+#   We multiply the predicted A76 latency by this factor to estimate A53 latency.
+
+id: tecno_spark8
+name: "Tecno Spark 8"
+tier: 1
+chipset: "MediaTek Helio A22"
+core_type: "Cortex-A53"
+cores: 4
+clock_ghz: 2.0
+ram_mb: 2048
+nn_meter_predictor: "cortexA76cpu_tflite21"
+scaling_factor: 2.8
+notes: "Very common entry-level device in West/Central Africa"

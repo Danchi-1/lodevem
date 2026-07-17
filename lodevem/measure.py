@@ -1,28 +1,19 @@
 """
-measure.py — Docker-based Memory and Latency Measurement (Host Side)
+measure.py — Memory Measurement (Two Modes)
 
-What this file does:
-    Spins up a Docker container with capped RAM and CPU,
-    runs the benchmark inside it, reads the results, and returns them.
+lodevem supports two measurement modes:
 
-The division of labour:
-    measure.py (this file)      — runs on YOUR machine, controls Docker
-    container_measure.py        — runs INSIDE the container, measures the model
+  FULL MODE  (Docker available — e.g. your Linux machine)
+      Spins up a RAM-capped Docker container. The kernel's OOM killer
+      enforces the memory limit hard. Can detect true OOM failures.
 
-Why Docker?
-    We cannot cap the RAM of just one Python function running in your
-    terminal session — that would affect your whole shell. Docker lets us
-    create a fully isolated process with a hard memory ceiling.
+  LITE MODE  (No Docker — e.g. Kaggle, Colab, Windows, macOS)
+      Uses psutil to track the process's peak RAM during inference.
+      Cannot enforce a memory cap, but measures real usage accurately.
+      Reports whether the measured RAM fits within the device profile's limit.
 
-    When the container hits its memory limit:
-    - The Linux kernel's OOM (Out Of Memory) killer terminates the process
-    - Docker catches this and reports the exit code
-    - We detect it and report "OOM" in the results table
-
-cgroups v2:
-    Docker's memory limits (--memory flag) use cgroups under the hood.
-    cgroups v2 is the modern Linux kernel feature that enforces these limits
-    at the hardware level — it's not just a suggestion.
+Mode is selected automatically — if Docker is reachable, full mode is used.
+If not, lite mode kicks in with a one-time notice.
 """
 
 from __future__ import annotations
@@ -30,6 +21,7 @@ from __future__ import annotations
 import json
 import logging
 import os
+import time
 from pathlib import Path
 from typing import Optional
 
@@ -37,11 +29,91 @@ from lodevem.profiles import DeviceProfile
 
 logger = logging.getLogger(__name__)
 
-# Name for our Docker image — built once, reused across all benchmarks
 DOCKER_IMAGE_NAME = "lodevem-benchmark:latest"
-
-# Path to the project root (two levels up from this file)
 PROJECT_ROOT = Path(__file__).parent.parent
+
+
+def _docker_available() -> bool:
+    """Check if Docker is installed and the daemon is running."""
+    try:
+        import docker
+        client = docker.from_env()
+        client.ping()
+        return True
+    except Exception:
+        return False
+
+
+def measure_memory_lite(
+    model_path: str | Path,
+    profile: DeviceProfile,
+    warmup_runs: int = 5,
+    timed_runs: int = 50,
+) -> dict:
+    """
+    Measure memory using psutil — no Docker required.
+
+    Works on Kaggle, Colab, or any environment.
+
+    What it does:
+        Loads your model, runs inference N times, and tracks
+        peak RAM usage of the current process using psutil.
+
+    Limitation vs full mode:
+        It cannot actually cap memory — so it won't kill your process
+        if you exceed a device's RAM limit. Instead, it compares your
+        measured peak RAM against the profile's limit and flags it.
+    """
+    try:
+        import psutil
+        import torch
+    except ImportError as e:
+        return {"status": "error", "error": str(e)}
+
+    model_path = Path(model_path)
+    process = psutil.Process(os.getpid())
+
+    try:
+        model = torch.load(model_path, map_location="cpu", weights_only=False)
+        model.eval()
+    except Exception as e:
+        return {"status": "error", "error": f"Failed to load model: {e}"}
+
+    dummy_input = torch.zeros(1, 3, 224, 224)
+
+    # Warmup
+    with torch.no_grad():
+        for _ in range(warmup_runs):
+            _ = model(dummy_input)
+
+    # Timed + memory measurement
+    latencies_ms = []
+    peak_ram_mb = 0.0
+
+    with torch.no_grad():
+        for _ in range(timed_runs):
+            t_start = time.perf_counter()
+            _ = model(dummy_input)
+            t_end = time.perf_counter()
+
+            ram_mb = process.memory_info().rss / (1024 * 1024)
+            peak_ram_mb = max(peak_ram_mb, ram_mb)
+            latencies_ms.append((t_end - t_start) * 1000)
+
+    latencies_ms.sort()
+    n = len(latencies_ms)
+
+    fits = peak_ram_mb <= profile.ram_mb
+
+    return {
+        "status": "ok",
+        "mode": "lite",
+        "peak_ram_mb": round(peak_ram_mb, 2),
+        "median_latency_ms": round(latencies_ms[n // 2], 2),
+        "p95_latency_ms": round(latencies_ms[int(n * 0.95)], 2),
+        "fits_in_ram": fits,
+        "ram_limit_mb": profile.ram_mb,
+    }
 
 
 def _get_docker_client():
@@ -97,6 +169,9 @@ def build_image(force_rebuild: bool = False) -> None:
     logger.info("Docker image built successfully.")
 
 
+_lite_mode_noticed = False   # print the notice only once per run
+
+
 def measure_memory(
     model_path: str | Path,
     profile: DeviceProfile,
@@ -104,33 +179,34 @@ def measure_memory(
     timed_runs: int = 50,
 ) -> dict:
     """
-    Run the model inside a RAM-capped Docker container and return measurements.
+    Measure peak RAM and latency — automatically chooses the right mode.
 
-    Args:
-        model_path:   Path to your .pt model file on the host machine.
-        profile:      The device profile — determines the RAM cap and CPU count.
-        warmup_runs:  Number of inference passes before timing starts.
-        timed_runs:   Number of timed inference passes.
+    If Docker is available: uses a RAM-capped container (full mode).
+    If Docker is not available: uses psutil (lite mode).
 
-    Returns a dict:
-        {
-            "status":             "ok" | "oom" | "error",
-            "peak_ram_mb":        float,    # Peak RAM used inside the container
-            "median_latency_ms":  float,    # Median of timed inference runs
-            "p95_latency_ms":     float,    # 95th percentile (for variance)
-            "fits_in_ram":        bool,     # True if model loaded without OOM
-            "ram_limit_mb":       int,      # What the limit was
-            "error":              str,      # Only present if status != "ok"
-        }
+    Both modes return the same dict shape so the rest of the tool
+    doesn't need to know which mode was used.
     """
+    global _lite_mode_noticed
+
+    if not _docker_available():
+        if not _lite_mode_noticed:
+            logger.warning(
+                "\n[lodevem] Docker not detected — running in LITE MODE.\n"
+                "  Memory is measured via psutil (no hard RAM cap enforced).\n"
+                "  'fits_in_ram' is based on measured vs profile limit.\n"
+                "  For full OOM detection, run on a Linux machine with Docker.\n"
+            )
+            _lite_mode_noticed = True
+        return measure_memory_lite(model_path, profile, warmup_runs, timed_runs)
+
+    # --- Full Docker mode ---
     client = _get_docker_client()
     model_path = Path(model_path).resolve()
 
     if not model_path.exists():
         raise FileNotFoundError(f"Model file not found: {model_path}")
 
-    # The model file lives on your machine. We mount it into the container
-    # at /models/<filename> so the container script can find it.
     container_model_path = f"/models/{model_path.name}"
 
     logger.info(
@@ -139,62 +215,42 @@ def measure_memory(
     )
 
     try:
-        # Start the container with constraints matching the device profile.
-        # --memory:     Hard RAM limit. The kernel's OOM killer enforces this.
-        # --memory-swap: Set equal to --memory to disable swap.
-        #                (Real phones don't have swap space.)
-        # --cpus:       Limit CPU time to simulate fewer/slower cores.
-        #               Note: this limits CPU *quota*, not clock speed.
         result = client.containers.run(
             image=DOCKER_IMAGE_NAME,
-            command=[
-                container_model_path,
-                str(warmup_runs),
-                str(timed_runs),
-            ],
+            command=[container_model_path, str(warmup_runs), str(timed_runs)],
             volumes={
-                str(model_path.parent): {
-                    "bind": "/models",
-                    "mode": "ro",  # Read-only — container can't modify your model
-                }
+                str(model_path.parent): {"bind": "/models", "mode": "ro"}
             },
-            mem_limit=f"{profile.ram_mb}m",         # e.g. "1024m" = 1GB
-            memswap_limit=f"{profile.ram_mb}m",      # Disables swap
-            nano_cpus=int(profile.cores * 1e9),      # Docker uses nanocpus
-            remove=True,             # Auto-remove container after it exits
+            mem_limit=f"{profile.ram_mb}m",
+            memswap_limit=f"{profile.ram_mb}m",
+            nano_cpus=int(profile.cores * 1e9),
+            remove=True,
             stdout=True,
             stderr=False,
         )
 
-        # result is the raw stdout bytes from the container
         raw_output = result.decode("utf-8").strip()
-
-        # Parse the JSON the container script printed
         data = json.loads(raw_output)
-
-        # Add context about the RAM limit
         data["fits_in_ram"] = data.get("status") == "ok"
         data["ram_limit_mb"] = profile.ram_mb
-
+        data["mode"] = "docker"
         return data
 
     except Exception as e:
         error_str = str(e)
-
-        # Docker raises an error when the container is OOM-killed.
-        # The error message contains "137" (Linux OOM kill signal).
         if "137" in error_str or "OOMKilled" in error_str:
             return {
                 "status": "oom",
+                "mode": "docker",
                 "fits_in_ram": False,
                 "ram_limit_mb": profile.ram_mb,
                 "peak_ram_mb": None,
                 "median_latency_ms": None,
-                "error": f"OOM: model was killed by the kernel (RAM limit: {profile.ram_mb}MB)",
+                "error": f"OOM: model killed by kernel (RAM limit: {profile.ram_mb}MB)",
             }
-
         return {
             "status": "error",
+            "mode": "docker",
             "fits_in_ram": False,
             "ram_limit_mb": profile.ram_mb,
             "peak_ram_mb": None,

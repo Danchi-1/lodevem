@@ -1,0 +1,12 @@
+id: itel_a23_pro
+name: "Itel A23 Pro"
+tier: 2
+android_edition: "Android Go"
+chipset: "Unisoc SC9832E"
+core_type: "Cortex-A53"
+cores: 4
+clock_ghz: 1.4
+ram_mb: 512
+nn_meter_predictor: "cortexA76cpu_tflite21"
+scaling_factor: 3.2
+notes: "512MB RAM — the absolute floor of Android Go. OOM expected for FP32/FP16."

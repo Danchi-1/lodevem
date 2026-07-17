@@ -1,0 +1,12 @@
+id: itel_p37
+name: "Itel P37"
+tier: 2
+android_edition: "Android Go"
+chipset: "Unisoc SC9863A"
+core_type: "Cortex-A55"
+cores: 4
+clock_ghz: 1.6
+ram_mb: 1024
+nn_meter_predictor: "cortexA76cpu_tflite21"
+scaling_factor: 2.2
+notes: "Android Go — popular budget phone in Nigerian/Ghanaian rural markets"

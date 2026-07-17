@@ -1,0 +1,12 @@
+id: tecno_pop5_go
+name: "Tecno Pop 5 Go"
+tier: 2
+android_edition: "Android Go"
+chipset: "MediaTek Helio A20"
+core_type: "Cortex-A53"
+cores: 4
+clock_ghz: 1.8
+ram_mb: 1024
+nn_meter_predictor: "cortexA76cpu_tflite21"
+scaling_factor: 2.8
+notes: "Android Go on A53 — representative of the most common Android Go chipset"

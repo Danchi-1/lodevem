@@ -1,36 +1,57 @@
 [build-system]
 requires = ["setuptools>=68", "wheel"]
-build-backend = "setuptools.backends.legacy:build"
+build-backend = "setuptools.build_meta"
 
 [project]
 name = "lodevem"
 version = "0.1.0"
-description = "Low-resource Device Virtual Emulator for ML benchmarking"
+description = "Low-resource Device Virtual Emulator — benchmark PyTorch models on simulated mobile device profiles"
 readme = "README.md"
 requires-python = ">=3.9"
 license = { text = "MIT" }
-authors = [{ name = "Danchi-1" }]
+authors = [{ name = "Danchi-1", email = "ohachordaniel2021@gmail.com" }]
+keywords = ["machine-learning", "benchmarking", "mobile", "edge-ai", "pytorch", "android"]
+
+classifiers = [
+    "Development Status :: 3 - Alpha",
+    "Intended Audience :: Science/Research",
+    "Topic :: Scientific/Engineering :: Artificial Intelligence",
+    "License :: OSI Approved :: MIT License",
+    "Programming Language :: Python :: 3",
+    "Programming Language :: Python :: 3.9",
+    "Programming Language :: Python :: 3.10",
+    "Programming Language :: Python :: 3.11",
+]
 
 dependencies = [
     "torch>=2.0",
     "torchvision>=0.15",
     "nn-meter>=1.4",
-    "docker>=7.0",
+    "psutil>=5.9",
     "pyyaml>=6.0",
     "rich>=13.0",
     "numpy>=1.24",
     "pandas>=2.0",
 ]
 
+# docker is optional — only needed for full mode (Linux with Docker)
+[project.optional-dependencies]
+docker = ["docker>=7.0"]
+full = ["docker>=7.0"]
+
+[project.urls]
+Homepage = "https://github.com/Danchi-1/lodevem"
+Repository = "https://github.com/Danchi-1/lodevem"
+"Bug Tracker" = "https://github.com/Danchi-1/lodevem/issues"
+
 [project.scripts]
-# This is the magic line.
-# It says: when someone types 'lodevem' in the terminal,
-# go to lodevem/cli.py and call the function named 'main'
+# This is the magic line — makes 'lodevem' a real terminal command
 lodevem = "lodevem.cli:main"
 
 [tool.setuptools.packages.find]
 where = ["."]
 include = ["lodevem*"]
 
+# Include the YAML profile files in the installed package
 [tool.setuptools.package-data]
-"*" = ["profiles/**/*.yaml"]
+"lodevem" = ["profiles/**/*.yaml"]

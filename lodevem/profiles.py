@@ -74,7 +74,7 @@ class DeviceProfile:
 # This works regardless of where the user runs lodevem from.
 # ---------------------------------------------------------------------------
 
-PROFILES_DIR = Path(__file__).parent.parent / "profiles"
+PROFILES_DIR = Path(__file__).parent / "profiles"
 
 VALID_TIERS = {1, 2, 3}
 TIER_DIR_MAP = {
