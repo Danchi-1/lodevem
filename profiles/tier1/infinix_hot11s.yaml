@@ -1,0 +1,11 @@
+id: infinix_hot11s
+name: "Infinix Hot 11s"
+tier: 1
+chipset: "MediaTek Helio G88"
+core_type: "Cortex-A75 + Cortex-A55"
+cores: 8
+clock_ghz: 2.0
+ram_mb: 4096
+nn_meter_predictor: "cortexA76cpu_tflite21"
+scaling_factor: 1.2
+notes: "Upper-budget, gaming-oriented chip — best performer in Tier 1"

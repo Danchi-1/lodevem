@@ -1,0 +1,11 @@
+id: tecno_pop6
+name: "Tecno Pop 6 Pro"
+tier: 1
+chipset: "MediaTek Helio A22"
+core_type: "Cortex-A53"
+cores: 4
+clock_ghz: 2.0
+ram_mb: 2048
+nn_meter_predictor: "cortexA76cpu_tflite21"
+scaling_factor: 2.8
+notes: "Nearly identical to Spark 8 — represents a very large market segment"

@@ -1,0 +1,12 @@
+id: redmi_a1
+name: "Xiaomi Redmi A1"
+tier: 2
+android_edition: "Android Go"
+chipset: "MediaTek Helio A22"
+core_type: "Cortex-A53"
+cores: 4
+clock_ghz: 1.8
+ram_mb: 2048
+nn_meter_predictor: "cortexA76cpu_tflite21"
+scaling_factor: 2.8
+notes: "Android Go with 2GB RAM — slightly more headroom than most Go devices"

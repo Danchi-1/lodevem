@@ -216,3 +216,18 @@ __marimo__/
 
 # Streamlit
 .streamlit/secrets.toml
+
+# lodevem-specific
+# ----------------
+# Your trained model files — too large for git (use git-lfs or keep local)
+models/*.pt
+models/*.pth
+models/*.onnx
+
+# Benchmark output — generated fresh each run, not source code
+results/*.csv
+results/*.json
+results/*.html
+
+# Compressed model variants generated during a run
+models/compressed/

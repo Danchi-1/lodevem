@@ -1,0 +1,12 @@
+id: samsung_a03_core
+name: "Samsung Galaxy A03 Core"
+tier: 2
+android_edition: "Android Go"
+chipset: "Unisoc SC9863A"
+core_type: "Cortex-A55"
+cores: 8
+clock_ghz: 1.6
+ram_mb: 2048
+nn_meter_predictor: "cortexA76cpu_tflite21"
+scaling_factor: 2.2
+notes: "Samsung's Android Go entry — 8 cores but all A55 efficiency cores"

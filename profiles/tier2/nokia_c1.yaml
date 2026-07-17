@@ -1,0 +1,12 @@
+id: nokia_c1
+name: "Nokia C1 2nd Edition"
+tier: 2
+android_edition: "Android Go"
+chipset: "MediaTek MT6580"
+core_type: "Cortex-A7"
+cores: 4
+clock_ghz: 1.3
+ram_mb: 1024
+nn_meter_predictor: "cortexA76cpu_tflite21"
+scaling_factor: 5.5
+notes: "Android Go — A7 is 5+ generations behind A76. Represents the true lower bound of Android Go inference."

@@ -1,0 +1,11 @@
+id: nokia_g11
+name: "Nokia G11"
+tier: 1
+chipset: "Unisoc T606"
+core_type: "Cortex-A75 + Cortex-A55"
+cores: 8
+clock_ghz: 1.6
+ram_mb: 3072
+nn_meter_predictor: "cortexA76cpu_tflite21"
+scaling_factor: 1.4
+notes: "Nokia's budget offering — popular in East Africa"

@@ -1,0 +1,20 @@
+# Core ML
+torch>=2.0
+torchvision>=0.15
+numpy>=1.24
+
+# Latency prediction (Microsoft Research tool)
+nn-meter>=1.4
+
+# Docker control from Python
+# This lets measure.py spin up/tear down containers programmatically
+docker>=7.0
+
+# Device profile files
+pyyaml>=6.0
+
+# Pretty terminal output (colored tables)
+rich>=13.0
+
+# Results handling
+pandas>=2.0

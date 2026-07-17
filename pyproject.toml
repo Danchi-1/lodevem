@@ -1,0 +1,36 @@
+[build-system]
+requires = ["setuptools>=68", "wheel"]
+build-backend = "setuptools.backends.legacy:build"
+
+[project]
+name = "lodevem"
+version = "0.1.0"
+description = "Low-resource Device Virtual Emulator for ML benchmarking"
+readme = "README.md"
+requires-python = ">=3.9"
+license = { text = "MIT" }
+authors = [{ name = "Danchi-1" }]
+
+dependencies = [
+    "torch>=2.0",
+    "torchvision>=0.15",
+    "nn-meter>=1.4",
+    "docker>=7.0",
+    "pyyaml>=6.0",
+    "rich>=13.0",
+    "numpy>=1.24",
+    "pandas>=2.0",
+]
+
+[project.scripts]
+# This is the magic line.
+# It says: when someone types 'lodevem' in the terminal,
+# go to lodevem/cli.py and call the function named 'main'
+lodevem = "lodevem.cli:main"
+
+[tool.setuptools.packages.find]
+where = ["."]
+include = ["lodevem*"]
+
+[tool.setuptools.package-data]
+"*" = ["profiles/**/*.yaml"]
