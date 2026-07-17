@@ -4,7 +4,7 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "lodevem"
-version = "0.1.0"
+version = "0.1.1"
 description = "Low-resource Device Virtual Emulator — benchmark PyTorch models on simulated mobile device profiles"
 readme = "README.md"
 requires-python = ">=3.9"
@@ -52,6 +52,6 @@ lodevem = "lodevem.cli:main"
 where = ["."]
 include = ["lodevem*"]
 
-# Include the YAML profile files in the installed package
+# Include device profile YAMLs and the Dockerfile for Docker mode
 [tool.setuptools.package-data]
-"lodevem" = ["profiles/**/*.yaml"]
+"lodevem" = ["profiles/**/*.yaml", "Dockerfile"]

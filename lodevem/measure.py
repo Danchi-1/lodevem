@@ -30,7 +30,9 @@ from lodevem.profiles import DeviceProfile
 logger = logging.getLogger(__name__)
 
 DOCKER_IMAGE_NAME = "lodevem-benchmark:latest"
-PROJECT_ROOT = Path(__file__).parent.parent
+# Build context = the lodevem package directory (contains Dockerfile + container_measure.py)
+# This works both when cloned from git AND when installed via pip
+DOCKER_BUILD_CONTEXT = Path(__file__).parent
 
 
 def _docker_available() -> bool:
@@ -161,10 +163,10 @@ def build_image(force_rebuild: bool = False) -> None:
     logger.info("(First build takes ~2 minutes — PyTorch is large. Subsequent runs are instant.)")
 
     client.images.build(
-        path=str(PROJECT_ROOT),
+        path=str(DOCKER_BUILD_CONTEXT),
         tag=DOCKER_IMAGE_NAME,
-        rm=True,          # Remove intermediate containers after build
-        forcerm=True,     # Remove intermediate containers even on failure
+        rm=True,
+        forcerm=True,
     )
     logger.info("Docker image built successfully.")
 
