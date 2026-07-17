@@ -66,17 +66,19 @@ def cmd_check(args: argparse.Namespace) -> None:
     all_ok = True
 
     # --- Docker ---
+    # Docker is optional. If it's not available we'll run in "lite" mode
+    # (psutil-based measurement). Only warn the user instead of failing.
     try:
         import docker
         client = docker.from_env()
         client.ping()
         console.print("  [green]✓[/green]  Docker        running")
     except ImportError:
-        console.print("  [red]✗[/red]  Docker SDK    not installed (run: pip install docker)")
-        all_ok = False
+        console.print("  [yellow]![/yellow]  Docker SDK    not installed — running in lite mode (no Docker).\n              To enable full mode install: pip install docker")
+        # Docker missing is not a fatal error; lite mode will be used.
     except Exception as e:
-        console.print(f"  [red]✗[/red]  Docker        not running — {e}")
-        all_ok = False
+        console.print(f"  [yellow]![/yellow]  Docker        not reachable — running in lite mode (Docker error: {e})")
+        # Docker daemon problems are not fatal for lite mode.
 
     # --- cgroups v2 ---
     # The file /sys/fs/cgroup/cgroup.controllers only exists on cgroups v2.
