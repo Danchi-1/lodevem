@@ -46,6 +46,8 @@ def run_benchmark(
     tier: int | None = None,
     warmup_runs: int = 5,
     timed_runs: int = 50,
+    simulate_throttling: bool = False,
+    no_predict: bool = False,
 ) -> list[dict]:
     """
     Run the full benchmark: all models × selected device profiles.
@@ -101,8 +103,10 @@ def run_benchmark(
 
             # Load the model for nn-Meter (latency prediction only)
             # This happens on the host — not inside Docker.
-            logger.info(f"Loading model for prediction: {model_label}")
-            model = load_model(model_path)
+            model = None
+            if not no_predict:
+                logger.info(f"Loading model for prediction: {model_label}")
+                model = load_model(model_path)
 
             for profile in device_profiles:
                 progress.update(
@@ -111,14 +115,19 @@ def run_benchmark(
                 )
 
                 # --- Step 1: Predict latency (nn-Meter, runs on host) ---
-                try:
-                    latency_result = predict_latency(model, profile)
-                    predicted_latency_ms = latency_result["scaled_latency_ms"]
-                    prediction_status = "ok"
-                except Exception as e:
-                    logger.warning(f"Latency prediction failed for {profile.id}: {e}")
+                # --- Step 1: Predict latency (nn-Meter, runs on host) ---
+                if no_predict:
                     predicted_latency_ms = None
-                    prediction_status = f"error: {e}"
+                    prediction_status = "skipped"
+                else:
+                    try:
+                        latency_result = predict_latency(model, profile)
+                        predicted_latency_ms = latency_result["scaled_latency_ms"]
+                        prediction_status = "ok"
+                    except Exception as e:
+                        logger.warning(f"Latency prediction failed for {profile.id}: {e}")
+                        predicted_latency_ms = None
+                        prediction_status = f"error: {e}"
 
                 # --- Step 2: Measure memory (Docker, runs in container) ---
                 try:
@@ -127,6 +136,7 @@ def run_benchmark(
                         profile=profile,
                         warmup_runs=warmup_runs,
                         timed_runs=timed_runs,
+                        simulate_throttling=simulate_throttling,
                     )
                 except Exception as e:
                     logger.error(f"Memory measurement failed for {profile.id}: {e}")
@@ -156,8 +166,10 @@ def run_benchmark(
                     "predicted_latency_ms": predicted_latency_ms,
                     "prediction_status":    prediction_status,
 
-                    # Memory (from Docker)
+                    # Memory / measured latency
                     "peak_ram_mb":          mem_result.get("peak_ram_mb"),
+                    "measured_latency_ms":  mem_result.get("median_latency_ms"),
+                    "measured_p95_ms":      mem_result.get("p95_latency_ms"),
                     "fits_in_ram":          mem_result.get("fits_in_ram", False),
                     "measure_status":       mem_result.get("status"),
                     "error":                mem_result.get("error"),

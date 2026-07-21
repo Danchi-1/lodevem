@@ -230,6 +230,8 @@ def cmd_start(args: argparse.Namespace) -> None:
             tier=tier,
             warmup_runs=args.warmup,
             timed_runs=args.runs,
+            simulate_throttling=getattr(args, "simulate_throttling", False),
+            no_predict=getattr(args, "no_predict", False),
         )
     except KeyboardInterrupt:
         console.print("\n[yellow]Benchmark interrupted by user.[/yellow]")
@@ -309,6 +311,21 @@ examples:
         default=50,
         metavar="N",
         help="Number of timed inference passes (default: 50)",
+    )
+    start_parser.add_argument(
+        "--simulate-throttling",
+        action="store_true",
+        help="Simulate thermal throttling in lite mode (reduces threads / increases latency over time)",
+    )
+    start_parser.add_argument(
+        "--no-predict",
+        action="store_true",
+        help="Skip nn-meter latency prediction and only use measured timing/memory",
+    )
+    start_parser.add_argument(
+        "--no-predict",
+        action="store_true",
+        help="Skip nn-meter latency prediction and only use measured timing/memory",
     )
     start_parser.add_argument(
         "--output",

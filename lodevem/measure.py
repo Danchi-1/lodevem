@@ -21,6 +21,8 @@ from __future__ import annotations
 import json
 import logging
 import os
+import subprocess
+import sys
 import time
 from pathlib import Path
 from typing import Optional
@@ -46,26 +48,86 @@ def _docker_available() -> bool:
         return False
 
 
+def _read_rss_kb() -> int:
+    """Read Resident Set Size from /proc/self/status if available."""
+    try:
+        with open("/proc/self/status", "r") as f:
+            for line in f:
+                if line.startswith("VmRSS:"):
+                    return int(line.split()[1])
+    except FileNotFoundError:
+        pass
+    return 0
+
+
+def _run_lite_subprocess(
+    model_path: str | Path,
+    profile: DeviceProfile,
+    warmup_runs: int,
+    timed_runs: int,
+    simulate_throttling: bool = False,
+) -> dict:
+    """Run the lite measurement in an isolated subprocess."""
+    cmd = [
+        sys.executable,
+        "-m",
+        "lodevem.measure",
+        "--lite-worker",
+        str(model_path),
+        str(profile.ram_mb),
+        str(profile.cores),
+        str(warmup_runs),
+        str(timed_runs),
+    ]
+    if simulate_throttling:
+        cmd.append("--simulate-throttling")
+
+    completed = subprocess.run(cmd, capture_output=True, text=True)
+    if completed.returncode != 0:
+        raise RuntimeError(
+            "Lite worker failed: "
+            f"returncode={completed.returncode}, stderr={completed.stderr.strip()}"
+        )
+
+    try:
+        data = json.loads(completed.stdout)
+    except json.JSONDecodeError as e:
+        raise RuntimeError(
+            f"Lite worker returned invalid JSON: {e}\nstdout={completed.stdout}\nstderr={completed.stderr}"
+        )
+
+    data["mode"] = "lite"
+    data["ram_limit_mb"] = profile.ram_mb
+    data["fits_in_ram"] = data.get("status") == "ok"
+    return data
+
+
 def measure_memory_lite(
     model_path: str | Path,
     profile: DeviceProfile,
     warmup_runs: int = 5,
     timed_runs: int = 50,
+    simulate_throttling: bool = False,
 ) -> dict:
     """
-    Measure memory using psutil — no Docker required.
+    Measure memory using an isolated worker process — no Docker required.
 
-    Works on Kaggle, Colab, or any environment.
+    This is closer to Docker mode because:
+      - the benchmark runs in a separate process,
+      - it can enforce a memory cap via OS resource limits when supported,
+      - it can limit PyTorch thread count to the profile CPU count.
 
-    What it does:
-        Loads your model, runs inference N times, and tracks
-        peak RAM usage of the current process using psutil.
-
-    Limitation vs full mode:
-        It cannot actually cap memory — so it won't kill your process
-        if you exceed a device's RAM limit. Instead, it compares your
-        measured peak RAM against the profile's limit and flags it.
+    If the subprocess worker cannot be used, we fall back to in-process
+    measurement.
     """
+    try:
+        return _run_lite_subprocess(model_path, profile, warmup_runs, timed_runs, simulate_throttling)
+    except Exception as e:
+        logger.warning(
+            "Lite subprocess worker unavailable, falling back to in-process lite mode: %s",
+            e,
+        )
+
     try:
         import psutil
         import torch
@@ -93,14 +155,32 @@ def measure_memory_lite(
     peak_ram_mb = 0.0
 
     with torch.no_grad():
-        for _ in range(timed_runs):
+        throttle_multiplier = 1.0
+        current_threads = profile.cores
+        for i in range(1, timed_runs + 1):
             t_start = time.perf_counter()
             _ = model(dummy_input)
             t_end = time.perf_counter()
 
+            # Apply simulated thermal throttling if requested
+            elapsed_ms = (t_end - t_start) * 1000
+            if simulate_throttling:
+                # After every 10 passes, reduce threads by 1 and increase latency multiplier
+                if i % 10 == 0:
+                    current_threads = max(1, current_threads - 1)
+                    try:
+                        if hasattr(torch, "set_num_threads"):
+                            torch.set_num_threads(current_threads)
+                        if hasattr(torch, "set_num_interop_threads"):
+                            torch.set_num_interop_threads(current_threads)
+                    except Exception:
+                        pass
+                    throttle_multiplier *= 1.15
+                elapsed_ms *= throttle_multiplier
+
             ram_mb = process.memory_info().rss / (1024 * 1024)
             peak_ram_mb = max(peak_ram_mb, ram_mb)
-            latencies_ms.append((t_end - t_start) * 1000)
+            latencies_ms.append(elapsed_ms)
 
     latencies_ms.sort()
     n = len(latencies_ms)
@@ -179,6 +259,7 @@ def measure_memory(
     profile: DeviceProfile,
     warmup_runs: int = 5,
     timed_runs: int = 50,
+    simulate_throttling: bool = False,
 ) -> dict:
     """
     Measure peak RAM and latency — automatically chooses the right mode.
@@ -195,12 +276,12 @@ def measure_memory(
         if not _lite_mode_noticed:
             logger.warning(
                 "\n[lodevem] Docker not detected — running in LITE MODE.\n"
-                "  Memory is measured via psutil (no hard RAM cap enforced).\n"
-                "  'fits_in_ram' is based on measured vs profile limit.\n"
-                "  For full OOM detection, run on a Linux machine with Docker.\n"
+                "  Benchmark runs in an isolated subprocess when possible.\n"
+                "  Local memory/thread limits are applied to approximate Docker behavior.\n"
+                "  For exact container enforcement, run on a Linux machine with Docker.\n"
             )
             _lite_mode_noticed = True
-        return measure_memory_lite(model_path, profile, warmup_runs, timed_runs)
+        return measure_memory_lite(model_path, profile, warmup_runs, timed_runs, simulate_throttling)
 
     # --- Full Docker mode ---
     client = _get_docker_client()
@@ -259,3 +340,136 @@ def measure_memory(
             "median_latency_ms": None,
             "error": error_str,
         }
+
+
+def _set_memory_limit(ram_limit_mb: int) -> None:
+    """Set a hard address-space limit if the platform supports it."""
+    try:
+        import resource
+    except ImportError:
+        return
+
+    if hasattr(resource, "RLIMIT_AS"):
+        limit = ram_limit_mb * 1024 * 1024
+        resource.setrlimit(resource.RLIMIT_AS, (limit, limit))
+
+
+def _lite_worker(
+    model_path: str,
+    ram_limit_mb: int,
+    num_threads: int,
+    warmup_runs: int,
+    timed_runs: int,
+    simulate_throttling: bool = False,
+) -> None:
+    import json
+    import time
+    import traceback
+
+    try:
+        import torch
+    except ImportError as e:
+        print(json.dumps({"status": "error", "error": str(e)}))
+        sys.exit(1)
+
+    _set_memory_limit(ram_limit_mb)
+
+    if hasattr(torch, "set_num_threads"):
+        torch.set_num_threads(num_threads)
+    if hasattr(torch, "set_num_interop_threads"):
+        torch.set_num_interop_threads(num_threads)
+
+    try:
+        model = torch.load(model_path, map_location="cpu", weights_only=False)
+        model.eval()
+    except Exception as e:
+        print(json.dumps({"status": "error", "error": f"Failed to load model: {e}"}))
+        sys.exit(1)
+
+    dummy_input = torch.zeros(1, 3, 224, 224)
+    latencies_ms = []
+    peak_rss_kb = 0
+
+    try:
+        with torch.no_grad():
+            for _ in range(warmup_runs):
+                _ = model(dummy_input)
+
+            # Thermal throttling simulation variables
+            throttle_multiplier = 1.0
+            current_threads = num_threads
+
+            for i in range(1, timed_runs + 1):
+                t_start = time.perf_counter()
+                _ = model(dummy_input)
+                t_end = time.perf_counter()
+
+                # Apply throttling if requested via environment flag
+                # Note: subprocess invocation will include the flag to trigger throttling
+                lat_ms = (t_end - t_start) * 1000 * throttle_multiplier
+                latencies_ms.append(lat_ms)
+
+                rss = _read_rss_kb()
+                peak_rss_kb = max(peak_rss_kb, rss)
+
+                # Apply simulated thermal throttling when requested
+                if simulate_throttling and i % 10 == 0:
+                    current_threads = max(1, current_threads - 1)
+                    try:
+                        if hasattr(torch, "set_num_threads"):
+                            torch.set_num_threads(current_threads)
+                        if hasattr(torch, "set_num_interop_threads"):
+                            torch.set_num_interop_threads(current_threads)
+                    except Exception:
+                        pass
+                    throttle_multiplier *= 1.15
+    except MemoryError:
+        print(json.dumps({
+            "status": "oom",
+            "error": "Out of memory — model could not be loaded within the RAM limit.",
+        }))
+        sys.exit(0)
+
+    latencies_ms.sort()
+    n = len(latencies_ms)
+
+    result = {
+        "status": "ok",
+        "peak_ram_mb": round(peak_rss_kb / 1024, 2),
+        "median_latency_ms": round(latencies_ms[n // 2], 2),
+        "p95_latency_ms": round(latencies_ms[int(n * 0.95)], 2),
+        "min_latency_ms": round(latencies_ms[0], 2),
+        "max_latency_ms": round(latencies_ms[-1], 2),
+        "timed_runs": timed_runs,
+        "warmup_runs": warmup_runs,
+    }
+    print(json.dumps(result))
+
+
+if __name__ == "__main__":
+    import argparse
+
+    parser = argparse.ArgumentParser(description="Lite worker for lodevem measurement")
+    parser.add_argument("--lite-worker", action="store_true")
+    parser.add_argument("--simulate-throttling", action="store_true")
+    parser.add_argument("model_path", nargs="?", help="Path to the model file")
+    parser.add_argument("ram_limit_mb", nargs="?", type=int, help="RAM limit in MB")
+    parser.add_argument("num_threads", nargs="?", type=int, help="Number of CPU threads")
+    parser.add_argument("warmup_runs", nargs="?", type=int, help="Warmup run count")
+    parser.add_argument("timed_runs", nargs="?", type=int, help="Timed run count")
+    args = parser.parse_args()
+
+    if args.lite_worker:
+        if not args.model_path or args.ram_limit_mb is None or args.num_threads is None or args.warmup_runs is None or args.timed_runs is None:
+            print(json.dumps({"status": "error", "error": "Missing lite worker arguments"}))
+            sys.exit(1)
+        _lite_worker(
+            args.model_path,
+            args.ram_limit_mb,
+            args.num_threads,
+            args.warmup_runs,
+            args.timed_runs,
+            simulate_throttling=args.simulate_throttling,
+        )
+    else:
+        parser.print_help()
