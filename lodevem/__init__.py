@@ -11,8 +11,9 @@ Usage:
 """
 
 import pkgutil
-if not hasattr(pkgutil, "ImpImporter"):
-    pkgutil.ImpImporter = type("ImpImporter", (object,), {})
+if not hasattr(pkgutil, 'ImpImporter'):
+    pkgutil.ImpImporter = type('ImpImporter', (object,), {})
 
-__version__ = "0.1.6"
+__version__ = "0.1.7"
 __author__ = "Danchi-1"
+
