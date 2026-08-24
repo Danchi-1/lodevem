@@ -43,7 +43,7 @@ def read_rss_kb() -> int:
     return 0
 
 
-def run_benchmark(model_path: str, warmup_runs: int, timed_runs: int) -> dict:
+def run_benchmark(model_path: str, warmup_runs: int, timed_runs: int, input_shape: tuple[int, ...] = (1, 3, 224, 224)) -> dict:
     """
     Load the model and measure inference latency + peak memory.
 
@@ -58,9 +58,8 @@ def run_benchmark(model_path: str, warmup_runs: int, timed_runs: int) -> dict:
     model.eval()
 
     # --- Prepare input ---
-    # Standard 224×224 RGB image, batch size 1.
-    # This matches the input shape MobileNetV3 was trained on.
-    dummy_input = torch.zeros(1, 3, 224, 224)
+    shape_to_use = getattr(model, "expected_input_shape", input_shape)
+    dummy_input = torch.zeros(*shape_to_use)
 
     # --- Warmup passes ---
     # PyTorch does lazy initialization — the first few inference calls
@@ -119,9 +118,11 @@ if __name__ == "__main__":
     model_path = sys.argv[1]
     warmup_runs = int(sys.argv[2])
     timed_runs = int(sys.argv[3])
+    input_shape_str = sys.argv[4] if len(sys.argv) > 4 else "1,3,224,224"
+    input_shape = tuple(map(int, input_shape_str.split(",")))
 
     try:
-        result = run_benchmark(model_path, warmup_runs, timed_runs)
+        result = run_benchmark(model_path, warmup_runs, timed_runs, input_shape)
     except MemoryError:
         # If the container hits the RAM cap, Python raises MemoryError.
         # We catch it here and report OOM cleanly rather than crashing.

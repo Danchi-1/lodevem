@@ -222,6 +222,12 @@ def cmd_start(args: argparse.Namespace) -> None:
     console.print(f"[dim]Models: {[p.name for p in model_paths]}[/dim]")
     console.print(f"[dim]Warmup: {args.warmup} runs  |  Timed: {args.runs} runs[/dim]\n")
 
+    try:
+        input_shape = tuple(map(int, getattr(args, "input_shape", "1,3,224,224").split(",")))
+    except ValueError:
+        console.print("[red]Invalid --input-shape format. Use comma-separated integers (e.g. 1,1,360).[/red]")
+        sys.exit(1)
+
     # --- Run ---
     try:
         results = runner.run_benchmark(
@@ -232,6 +238,7 @@ def cmd_start(args: argparse.Namespace) -> None:
             timed_runs=args.runs,
             simulate_throttling=getattr(args, "simulate_throttling", False),
             no_predict=getattr(args, "no_predict", False),
+            input_shape=input_shape,
         )
     except KeyboardInterrupt:
         console.print("\n[yellow]Benchmark interrupted by user.[/yellow]")
@@ -321,6 +328,11 @@ examples:
         "--no-predict",
         action="store_true",
         help="Skip nn-meter latency prediction and only use measured timing/memory",
+    )
+    start_parser.add_argument(
+        "--input-shape",
+        default="1,3,224,224",
+        help="Input tensor shape as comma-separated integers (default: 1,3,224,224)",
     )
     start_parser.add_argument(
         "--output",

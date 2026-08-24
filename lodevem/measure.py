@@ -66,6 +66,7 @@ def _run_lite_subprocess(
     warmup_runs: int,
     timed_runs: int,
     simulate_throttling: bool = False,
+    input_shape: tuple[int, ...] = (1, 3, 224, 224),
 ) -> dict:
     """Run the lite measurement in an isolated subprocess."""
     cmd = [
@@ -78,6 +79,7 @@ def _run_lite_subprocess(
         str(profile.cores),
         str(warmup_runs),
         str(timed_runs),
+        ",".join(map(str, input_shape)),
     ]
     if simulate_throttling:
         cmd.append("--simulate-throttling")
@@ -108,6 +110,7 @@ def measure_memory_lite(
     warmup_runs: int = 5,
     timed_runs: int = 50,
     simulate_throttling: bool = False,
+    input_shape: tuple[int, ...] = (1, 3, 224, 224),
 ) -> dict:
     """
     Measure memory using an isolated worker process — no Docker required.
@@ -121,7 +124,7 @@ def measure_memory_lite(
     measurement.
     """
     try:
-        return _run_lite_subprocess(model_path, profile, warmup_runs, timed_runs, simulate_throttling)
+        return _run_lite_subprocess(model_path, profile, warmup_runs, timed_runs, simulate_throttling, input_shape)
     except Exception as e:
         logger.warning(
             "Lite subprocess worker unavailable, falling back to in-process lite mode: %s",
@@ -143,7 +146,8 @@ def measure_memory_lite(
     except Exception as e:
         return {"status": "error", "error": f"Failed to load model: {e}"}
 
-    dummy_input = torch.zeros(1, 3, 224, 224)
+    shape_to_use = getattr(model, "expected_input_shape", input_shape)
+    dummy_input = torch.zeros(*shape_to_use)
 
     # Warmup
     with torch.no_grad():
@@ -260,6 +264,7 @@ def measure_memory(
     warmup_runs: int = 5,
     timed_runs: int = 50,
     simulate_throttling: bool = False,
+    input_shape: tuple[int, ...] = (1, 3, 224, 224),
 ) -> dict:
     """
     Measure peak RAM and latency — automatically chooses the right mode.
@@ -281,7 +286,7 @@ def measure_memory(
                 "  For exact container enforcement, run on a Linux machine with Docker.\n"
             )
             _lite_mode_noticed = True
-        return measure_memory_lite(model_path, profile, warmup_runs, timed_runs, simulate_throttling)
+        return measure_memory_lite(model_path, profile, warmup_runs, timed_runs, simulate_throttling, input_shape)
 
     # --- Full Docker mode ---
     client = _get_docker_client()
@@ -300,7 +305,7 @@ def measure_memory(
     try:
         result = client.containers.run(
             image=DOCKER_IMAGE_NAME,
-            command=[container_model_path, str(warmup_runs), str(timed_runs)],
+            command=[container_model_path, str(warmup_runs), str(timed_runs), ",".join(map(str, input_shape))],
             volumes={
                 str(model_path.parent): {"bind": "/models", "mode": "ro"}
             },
@@ -361,6 +366,7 @@ def _lite_worker(
     warmup_runs: int,
     timed_runs: int,
     simulate_throttling: bool = False,
+    input_shape: tuple[int, ...] = (1, 3, 224, 224),
 ) -> None:
     import json
     import time
@@ -386,7 +392,8 @@ def _lite_worker(
         print(json.dumps({"status": "error", "error": f"Failed to load model: {e}"}))
         sys.exit(1)
 
-    dummy_input = torch.zeros(1, 3, 224, 224)
+    shape_to_use = getattr(model, "expected_input_shape", input_shape)
+    dummy_input = torch.zeros(*shape_to_use)
     latencies_ms = []
     peak_rss_kb = 0
 
@@ -457,12 +464,16 @@ if __name__ == "__main__":
     parser.add_argument("num_threads", nargs="?", type=int, help="Number of CPU threads")
     parser.add_argument("warmup_runs", nargs="?", type=int, help="Warmup run count")
     parser.add_argument("timed_runs", nargs="?", type=int, help="Timed run count")
+    parser.add_argument("input_shape_str", nargs="?", default="1,3,224,224", help="Input shape as comma-separated integers")
     args = parser.parse_args()
 
     if args.lite_worker:
         if not args.model_path or args.ram_limit_mb is None or args.num_threads is None or args.warmup_runs is None or args.timed_runs is None:
             print(json.dumps({"status": "error", "error": "Missing lite worker arguments"}))
             sys.exit(1)
+            
+        input_shape = tuple(map(int, args.input_shape_str.split(",")))
+        
         _lite_worker(
             args.model_path,
             args.ram_limit_mb,
@@ -470,6 +481,7 @@ if __name__ == "__main__":
             args.warmup_runs,
             args.timed_runs,
             simulate_throttling=args.simulate_throttling,
+            input_shape=input_shape,
         )
     else:
         parser.print_help()

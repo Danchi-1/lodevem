@@ -107,9 +107,8 @@ def predict_latency(
     logger.info(f"Loading nn-Meter predictor: {NN_METER_PREDICTOR}")
     predictor = load_lat_predictor(NN_METER_PREDICTOR)
 
-    # nn-Meter needs the model in eval mode and a sample input to trace the graph
     model.eval()
-    dummy_input = torch.zeros(input_shape)
+    shape_to_use = getattr(model, "expected_input_shape", input_shape)
 
     logger.info(
         f"Predicting latency for '{profile.name}' "
@@ -117,7 +116,7 @@ def predict_latency(
     )
 
     # nn-Meter returns latency in milliseconds for the A76 baseline
-    a76_latency_ms: float = predictor.predict(model, input_shape)
+    a76_latency_ms: float = predictor.predict(model, shape_to_use)
 
     # Apply the scaling factor to estimate latency on the actual target core
     scaled_latency_ms = round(a76_latency_ms * profile.scaling_factor, 2)
@@ -128,7 +127,7 @@ def predict_latency(
         "scaled_latency_ms": scaled_latency_ms,
         "scaling_factor": profile.scaling_factor,
         "target_core": profile.core_type,
-        "input_shape": input_shape,
+        "input_shape": shape_to_use,
     }
 
 

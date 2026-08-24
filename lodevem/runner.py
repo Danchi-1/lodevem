@@ -48,6 +48,7 @@ def run_benchmark(
     timed_runs: int = 50,
     simulate_throttling: bool = False,
     no_predict: bool = False,
+    input_shape: tuple[int, ...] = (1, 3, 224, 224),
 ) -> list[dict]:
     """
     Run the full benchmark: all models × selected device profiles.
@@ -121,7 +122,7 @@ def run_benchmark(
                     prediction_status = "skipped"
                 else:
                     try:
-                        latency_result = predict_latency(model, profile)
+                        latency_result = predict_latency(model, profile, input_shape=input_shape)
                         predicted_latency_ms = latency_result["scaled_latency_ms"]
                         prediction_status = "ok"
                     except Exception as e:
@@ -137,6 +138,7 @@ def run_benchmark(
                         warmup_runs=warmup_runs,
                         timed_runs=timed_runs,
                         simulate_throttling=simulate_throttling,
+                        input_shape=input_shape,
                     )
                 except Exception as e:
                     logger.error(f"Memory measurement failed for {profile.id}: {e}")

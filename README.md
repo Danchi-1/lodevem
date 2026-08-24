@@ -105,6 +105,22 @@ lodevem start models/cocoa_int8.pt --tier tier3     # KaiOS / feature phones onl
 lodevem start models/cocoa_int8.pt --profile nokia_c1
 ```
 
+### Sequence Models & Custom Input Shapes
+
+By default, `lodevem` assumes your model is an image classifier and traces it with a `(1, 3, 224, 224)` dummy tensor. If you are benchmarking sequence models (like Audio or ECG), you must override this:
+
+```bash
+lodevem start models/ecg_net.pt --input-shape 1,1,360
+```
+
+**Automatic Shape Detection:**
+You can also bake the shape directly into your PyTorch model before saving it:
+```python
+model.expected_input_shape = (1, 1, 360)
+torch.save(model, "my_model.pt")
+```
+`lodevem` will automatically detect `model.expected_input_shape` and use it if you omit the CLI flag.
+
 ### List all available device profiles
 
 ```bash
