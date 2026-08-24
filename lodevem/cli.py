@@ -323,11 +323,6 @@ examples:
         help="Skip nn-meter latency prediction and only use measured timing/memory",
     )
     start_parser.add_argument(
-        "--no-predict",
-        action="store_true",
-        help="Skip nn-meter latency prediction and only use measured timing/memory",
-    )
-    start_parser.add_argument(
         "--output",
         metavar="PATH",
         help="Save CSV results to this path (default: ./results/benchmark_<timestamp>.csv)",
