@@ -67,14 +67,13 @@ def _try_import_nn_meter():
     - The error message is specific and actionable
     """
     try:
-        from nn_meter import load_lat_predictor
-        return load_lat_predictor
-    except ImportError:
+        from nn_meter import load_latency_predictor
+        return load_latency_predictor
+    except ImportError as e:
         raise ImportError(
-            "nn-meter is not installed. Run: pip install nn-meter\n"
-            "If you've already installed it, make sure you're in the right "
-            "virtual environment."
-        )
+            f"nn-meter failed to import. Original error: {e}\n"
+            "Run: pip install nn-meter. If already installed, check your environment."
+        ) from e
 
 
 def predict_latency(
@@ -102,10 +101,10 @@ def predict_latency(
             "input_shape":        tuple,
         }
     """
-    load_lat_predictor = _try_import_nn_meter()
+    load_latency_predictor = _try_import_nn_meter()
 
     logger.info(f"Loading nn-Meter predictor: {NN_METER_PREDICTOR}")
-    predictor = load_lat_predictor(NN_METER_PREDICTOR)
+    predictor = load_latency_predictor(NN_METER_PREDICTOR)
 
     model.eval()
     shape_to_use = getattr(model, "expected_input_shape", input_shape)
