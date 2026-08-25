@@ -121,6 +121,24 @@ torch.save(model, "my_model.pt")
 ```
 `lodevem` will automatically detect `model.expected_input_shape` and use it if you omit the CLI flag.
 
+### Fast Memory Checks / Skipping Latency
+
+If you don't care about predicting inference latency and just want to know **"Does my model fit in this device's RAM?"**, you can completely skip the 376MB `nn-meter` predictor download and vastly speed up the process by running the model only 1 time:
+
+```bash
+lodevem start models/my_model.pt --no-predict --warmup 0 --timed 1
+```
+
+Or from Python:
+```python
+results = runner.run_benchmark(
+    model_paths=["models/my_model.pt"],
+    no_predict=True,   # Skips nn-meter and its downloads
+    warmup_runs=0,     # Skips warmup passes
+    timed_runs=1       # Only executes the model ONCE to grab peak RAM
+)
+```
+
 ### List all available device profiles
 
 ```bash

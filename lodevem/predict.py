@@ -106,6 +106,14 @@ def predict_latency(
     """
     if NN_METER_PREDICTOR not in _PREDICTOR_CACHE:
         load_latency_predictor = _try_import_nn_meter()
+        
+        # Check if the predictor exists locally to warn the user about the download
+        predictor_path = Path.home() / ".nn_meter" / "data" / "predictor" / NN_METER_PREDICTOR
+        if not predictor_path.exists():
+            logger.warning(f"nn-meter predictor dataset (~376MB) not found locally at {predictor_path}.")
+            logger.warning("nn-meter will now attempt to download it from GitHub.")
+            logger.warning("If you wish to skip this download, cancel and run with --no-predict (or no_predict=True).")
+            
         logger.info(f"Loading nn-Meter predictor: {NN_METER_PREDICTOR}")
         _PREDICTOR_CACHE[NN_METER_PREDICTOR] = load_latency_predictor(NN_METER_PREDICTOR)
         
