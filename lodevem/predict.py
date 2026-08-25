@@ -57,6 +57,9 @@ logger = logging.getLogger(__name__)
 
 NN_METER_PREDICTOR = "cortexA76cpu_tflite21"
 
+# Cache the predictor so we don't load/download it 16 times per model
+_PREDICTOR_CACHE = {}
+
 
 def _try_import_nn_meter():
     """
@@ -101,10 +104,12 @@ def predict_latency(
             "input_shape":        tuple,
         }
     """
-    load_latency_predictor = _try_import_nn_meter()
-
-    logger.info(f"Loading nn-Meter predictor: {NN_METER_PREDICTOR}")
-    predictor = load_latency_predictor(NN_METER_PREDICTOR)
+    if NN_METER_PREDICTOR not in _PREDICTOR_CACHE:
+        load_latency_predictor = _try_import_nn_meter()
+        logger.info(f"Loading nn-Meter predictor: {NN_METER_PREDICTOR}")
+        _PREDICTOR_CACHE[NN_METER_PREDICTOR] = load_latency_predictor(NN_METER_PREDICTOR)
+        
+    predictor = _PREDICTOR_CACHE[NN_METER_PREDICTOR]
 
     model.eval()
     shape_to_use = getattr(model, "expected_input_shape", input_shape)
