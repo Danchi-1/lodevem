@@ -14,6 +14,6 @@ import pkgutil
 if not hasattr(pkgutil, 'ImpImporter'):
     pkgutil.ImpImporter = type('ImpImporter', (object,), {})
 
-__version__ = "0.1.9"
+__version__ = "0.1.10"
 __author__ = "Danchi-1"
 

@@ -378,7 +378,9 @@ def _lite_worker(
         print(json.dumps({"status": "error", "error": str(e)}))
         sys.exit(1)
 
-    _set_memory_limit(ram_limit_mb)
+    # We no longer use _set_memory_limit(ram_limit_mb) because restricting 
+    # virtual memory (RLIMIT_AS) causes PyTorch thread pools to deadlock 
+    # or hang indefinitely. We just measure actual RSS instead.
 
     if hasattr(torch, "set_num_threads"):
         torch.set_num_threads(num_threads)
