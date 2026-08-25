@@ -75,7 +75,7 @@ def _try_import_nn_meter():
     except ImportError as e:
         raise ImportError(
             f"nn-meter failed to import. Original error: {e}\n"
-            "Run: pip install nn-meter. If already installed, check your environment."
+            "Run: pip install 'lodevem[pytorch]'. If already installed, check your environment."
         ) from e
 
 

@@ -4,7 +4,7 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "lodevem"
-version = "0.1.11"
+version = "0.2.0"
 description = "Low-resource Device Virtual Emulator — benchmark PyTorch models on simulated mobile device profiles"
 readme = "README.md"
 requires-python = ">=3.9"
@@ -24,9 +24,6 @@ classifiers = [
 ]
 
 dependencies = [
-    "torch>=2.0",
-    "torchvision>=0.15",
-    "nn-meter>=1.4",
     "psutil>=5.9",
     "pyyaml>=6.0",
     "rich>=13.0",
@@ -37,7 +34,11 @@ dependencies = [
 # docker is optional — only needed for full mode (Linux with Docker)
 [project.optional-dependencies]
 docker = ["docker>=7.0"]
-full = ["docker>=7.0"]
+pytorch = ["torch>=2.0", "torchvision>=0.15", "nn-meter>=1.4"]
+hf = ["transformers>=4.0", "accelerate>=0.20"]
+sklearn = ["scikit-learn>=1.0", "hummingbird-ml>=0.4"]
+onnx = ["onnxruntime>=1.15"]
+all = ["docker>=7.0", "torch>=2.0", "torchvision>=0.15", "nn-meter>=1.4", "transformers>=4.0", "accelerate>=0.20", "scikit-learn>=1.0", "hummingbird-ml>=0.4", "onnxruntime>=1.15"]
 
 [project.urls]
 Homepage = "https://github.com/Danchi-1/lodevem"

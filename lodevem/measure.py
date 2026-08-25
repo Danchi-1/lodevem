@@ -135,7 +135,7 @@ def measure_memory_lite(
         import psutil
         import torch
     except ImportError as e:
-        return {"status": "error", "error": str(e)}
+        return {"status": "error", "error": f"Missing dependency. Run: pip install 'lodevem[pytorch]'. Details: {e}"}
 
     model_path = Path(model_path)
     process = psutil.Process(os.getpid())
@@ -375,7 +375,7 @@ def _lite_worker(
     try:
         import torch
     except ImportError as e:
-        print(json.dumps({"status": "error", "error": str(e)}))
+        print(json.dumps({"status": "error", "error": f"Missing dependency. Run: pip install 'lodevem[pytorch]'. Details: {e}"}))
         sys.exit(1)
 
     # We no longer use _set_memory_limit(ram_limit_mb) because restricting 

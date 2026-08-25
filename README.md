@@ -57,7 +57,18 @@ You don't choose the mode — lodevem detects Docker automatically and uses whic
 pip install lodevem
 ```
 
-**That's it.** All 16 device profiles are bundled inside the package. No cloning required.
+**Note:** The base `lodevem` package is extremely lightweight (<10MB) but does not include heavy ML frameworks. 
+To benchmark specific model types, install the optional extras:
+
+```bash
+pip install lodevem[pytorch]  # For PyTorch models (.pt, .pth) and nn-meter latency prediction
+pip install lodevem[onnx]     # For ONNX models (.onnx)
+pip install lodevem[hf]       # For Hugging Face models
+pip install lodevem[sklearn]  # For Scikit-learn/XGBoost models
+pip install lodevem[all]      # Installs everything
+```
+
+All 16 device profiles are bundled inside the package. No cloning required.
 
 ### Optional: enable full Docker mode (Linux only)
 
