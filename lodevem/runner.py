@@ -34,9 +34,10 @@ from rich.progress import (
 
 from lodevem import profiles as profile_loader
 from lodevem.measure import build_image, measure_memory, _docker_available
-from lodevem.predict import load_model, predict_latency
+from lodevem.predict import predict_latency
 from lodevem.preflight import PreFlightAnalyzer
 from lodevem.profiles import DeviceProfile
+from lodevem.backends import get_backend
 
 logger = logging.getLogger(__name__)
 
@@ -141,12 +142,16 @@ def run_benchmark(
             model_path = Path(model_path)
             model_label = model_path.name   # e.g. "cocoa_int8.pt"
 
-            # Load the model for nn-Meter (latency prediction only)
-            # This happens on the host — not inside Docker.
-            model = None
+            # Load the model backend adapter (for latency prediction on host)
+            backend = None
             if not no_predict:
-                logger.info(f"Loading model for prediction: {model_label}")
-                model = load_model(model_path)
+                logger.info(f"Loading backend adapter for prediction: {model_label}")
+                try:
+                    backend = get_backend(model_path)
+                except Exception as e:
+                    logger.error(f"Failed to load backend for {model_label}: {e}")
+                    # If we can't load the backend, prediction must fail, but we can still try to measure it
+                    pass
 
             for profile in device_profiles:
                 progress.update(
@@ -178,12 +183,12 @@ def run_benchmark(
                     continue
 
                 # --- Step 1: Predict latency (nn-Meter, runs on host) ---
-                if no_predict:
+                if no_predict or backend is None:
                     predicted_latency_ms = None
-                    prediction_status = "skipped"
+                    prediction_status = "skipped (no backend)" if backend is None and not no_predict else "skipped"
                 else:
                     try:
-                        latency_result = predict_latency(model, profile, input_shape=input_shape)
+                        latency_result = predict_latency(backend, profile, input_shape=input_shape)
                         predicted_latency_ms = latency_result["scaled_latency_ms"]
                         prediction_status = "ok"
                     except Exception as e:

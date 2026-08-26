@@ -77,7 +77,7 @@ def _try_import_nn_meter():
 
 
 def predict_latency(
-    model: Any,
+    backend: Any,
     profile: DeviceProfile,
     input_shape: tuple = (1, 3, 224, 224),
 ) -> dict:
@@ -85,7 +85,7 @@ def predict_latency(
     Predict inference latency for a model on a given device profile.
 
     Args:
-        model:        Your PyTorch model (nn.Module).
+        backend:      The BenchmarkBackend adapter instance.
         profile:      The device profile to simulate.
         input_shape:  The shape of one input tensor. Default is (1, 3, 224, 224)
                       which is batch=1, RGB image, 224×224 pixels — standard for
@@ -116,6 +116,11 @@ def predict_latency(
         
     predictor = _PREDICTOR_CACHE[NN_METER_PREDICTOR]
 
+    from lodevem.backends.pytorch import PyTorchBackend
+    if not isinstance(backend, PyTorchBackend):
+        raise NotImplementedError(f"nn-Meter latency prediction is only supported for PyTorch models. Got: {type(backend)}")
+        
+    model = backend.model
     model.eval()
     shape_to_use = getattr(model, "expected_input_shape", input_shape)
 
@@ -138,48 +143,5 @@ def predict_latency(
         "target_core": profile.core_type,
         "input_shape": shape_to_use,
     }
-
-
-def load_model(model_path: str | Path) -> Any:
-    """
-    Load a PyTorch model from a .pt or .pth file.
-
-    We use weights_only=False because we need to load the full model
-    (architecture + weights), not just the state dict.
-
-    If the user saved only a state dict (not the full model), this will fail
-    with a clear error telling them what to do.
-    """
-    model_path = Path(model_path)
-
-    if not model_path.exists():
-        raise FileNotFoundError(
-            f"Model file not found: '{model_path}'\n"
-            f"Make sure the path is correct and the file exists."
-        )
-
-    logger.info(f"Loading model from: {model_path}")
-
-    try:
-        import torch
-        import torch.nn as nn
-    except ImportError as e:
-        raise ImportError(f"Missing dependency. Run: pip install 'lodevem[pytorch]'. Details: {e}") from e
-
-    try:
-        # Try loading as a full model first (most common case)
-        model = torch.load(model_path, map_location="cpu", weights_only=False)
-        if isinstance(model, nn.Module):
-            return model.eval()
-
-        # If it loaded but isn't an nn.Module, it's probably a state dict
-        raise TypeError(
-            f"'{model_path.name}' contains a state dict, not a full model.\n"
-            "To save a full model: torch.save(model, 'path.pt')\n"
-            "To save only weights: torch.save(model.state_dict(), 'path.pt')"
-        )
-
-    except Exception as e:
-        raise RuntimeError(f"Failed to load model from '{model_path}': {e}") from e
 
 

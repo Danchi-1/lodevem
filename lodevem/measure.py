@@ -133,54 +133,52 @@ def measure_memory_lite(
 
     try:
         import psutil
-        import torch
+        from lodevem.backends import get_backend
     except ImportError as e:
-        return {"status": "error", "error": f"Missing dependency. Run: pip install 'lodevem[pytorch]'. Details: {e}"}
+        return {"status": "error", "error": f"Missing dependency: {e}"}
 
     model_path = Path(model_path)
     process = psutil.Process(os.getpid())
 
     try:
-        model = torch.load(model_path, map_location="cpu", weights_only=False)
-        model.eval()
+        backend = get_backend(model_path)
     except Exception as e:
-        return {"status": "error", "error": f"Failed to load model: {e}"}
+        return {"status": "error", "error": f"Failed to load backend: {e}"}
 
-    shape_to_use = getattr(model, "expected_input_shape", input_shape)
-    dummy_input = torch.zeros(*shape_to_use)
+    try:
+        dummy_input = backend.generate_inputs(input_shape)
+    except Exception as e:
+        return {"status": "error", "error": f"Failed to generate inputs: {e}"}
 
     # Warmup
-    with torch.no_grad():
+    try:
         for _ in range(warmup_runs):
-            _ = model(dummy_input)
+            _ = backend.execute(dummy_input)
+    except Exception as e:
+        return {"status": "error", "error": f"Inference failed during warmup: {e}"}
 
     # Timed + memory measurement
     latencies_ms = []
     peak_ram_mb = 0.0
 
-    with torch.no_grad():
-        throttle_multiplier = 1.0
-        current_threads = profile.cores
-        for i in range(1, timed_runs + 1):
-            t_start = time.perf_counter()
-            _ = model(dummy_input)
-            t_end = time.perf_counter()
+    throttle_multiplier = 1.0
+    current_threads = profile.cores
+    backend.set_threads(current_threads)
 
-            # Apply simulated thermal throttling if requested
-            elapsed_ms = (t_end - t_start) * 1000
-            if simulate_throttling:
-                # After every 10 passes, reduce threads by 1 and increase latency multiplier
-                if i % 10 == 0:
-                    current_threads = max(1, current_threads - 1)
-                    try:
-                        if hasattr(torch, "set_num_threads"):
-                            torch.set_num_threads(current_threads)
-                        if hasattr(torch, "set_num_interop_threads"):
-                            torch.set_num_interop_threads(current_threads)
-                    except Exception:
-                        pass
-                    throttle_multiplier *= 1.15
-                elapsed_ms *= throttle_multiplier
+    for i in range(1, timed_runs + 1):
+        t_start = time.perf_counter()
+        _ = backend.execute(dummy_input)
+        t_end = time.perf_counter()
+
+        # Apply simulated thermal throttling if requested
+        elapsed_ms = (t_end - t_start) * 1000
+        if simulate_throttling:
+            # After every 10 passes, reduce threads by 1 and increase latency multiplier
+            if i % 10 == 0:
+                current_threads = max(1, current_threads - 1)
+                backend.set_threads(current_threads)
+                throttle_multiplier *= 1.15
+            elapsed_ms *= throttle_multiplier
 
             ram_mb = process.memory_info().rss / (1024 * 1024)
             peak_ram_mb = max(peak_ram_mb, ram_mb)
@@ -373,65 +371,54 @@ def _lite_worker(
     import traceback
 
     try:
-        import torch
+        from lodevem.backends import get_backend
     except ImportError as e:
-        print(json.dumps({"status": "error", "error": f"Missing dependency. Run: pip install 'lodevem[pytorch]'. Details: {e}"}))
+        print(json.dumps({"status": "error", "error": f"Missing dependency: {e}"}))
         sys.exit(1)
-
-    # We no longer use _set_memory_limit(ram_limit_mb) because restricting 
-    # virtual memory (RLIMIT_AS) causes PyTorch thread pools to deadlock 
-    # or hang indefinitely. We just measure actual RSS instead.
-
-    if hasattr(torch, "set_num_threads"):
-        torch.set_num_threads(num_threads)
-    if hasattr(torch, "set_num_interop_threads"):
-        torch.set_num_interop_threads(num_threads)
 
     try:
-        model = torch.load(model_path, map_location="cpu", weights_only=False)
-        model.eval()
+        backend = get_backend(model_path)
     except Exception as e:
-        print(json.dumps({"status": "error", "error": f"Failed to load model: {e}"}))
+        print(json.dumps({"status": "error", "error": f"Failed to load backend: {e}"}))
         sys.exit(1)
 
-    shape_to_use = getattr(model, "expected_input_shape", input_shape)
-    dummy_input = torch.zeros(*shape_to_use)
+    backend.set_threads(num_threads)
+
+    try:
+        dummy_input = backend.generate_inputs(input_shape)
+    except Exception as e:
+        print(json.dumps({"status": "error", "error": f"Failed to generate inputs: {e}"}))
+        sys.exit(1)
+
     latencies_ms = []
     peak_rss_kb = 0
 
     try:
-        with torch.no_grad():
-            for _ in range(warmup_runs):
-                _ = model(dummy_input)
+        for _ in range(warmup_runs):
+            _ = backend.execute(dummy_input)
 
-            # Thermal throttling simulation variables
-            throttle_multiplier = 1.0
-            current_threads = num_threads
+        # Thermal throttling simulation variables
+        throttle_multiplier = 1.0
+        current_threads = num_threads
 
-            for i in range(1, timed_runs + 1):
-                t_start = time.perf_counter()
-                _ = model(dummy_input)
-                t_end = time.perf_counter()
+        for i in range(1, timed_runs + 1):
+            t_start = time.perf_counter()
+            _ = backend.execute(dummy_input)
+            t_end = time.perf_counter()
 
-                # Apply throttling if requested via environment flag
-                # Note: subprocess invocation will include the flag to trigger throttling
-                lat_ms = (t_end - t_start) * 1000 * throttle_multiplier
-                latencies_ms.append(lat_ms)
+            # Apply throttling if requested via environment flag
+            # Note: subprocess invocation will include the flag to trigger throttling
+            lat_ms = (t_end - t_start) * 1000 * throttle_multiplier
+            latencies_ms.append(lat_ms)
 
-                rss = _read_rss_kb()
-                peak_rss_kb = max(peak_rss_kb, rss)
+            rss = _read_rss_kb()
+            peak_rss_kb = max(peak_rss_kb, rss)
 
-                # Apply simulated thermal throttling when requested
-                if simulate_throttling and i % 10 == 0:
-                    current_threads = max(1, current_threads - 1)
-                    try:
-                        if hasattr(torch, "set_num_threads"):
-                            torch.set_num_threads(current_threads)
-                        if hasattr(torch, "set_num_interop_threads"):
-                            torch.set_num_interop_threads(current_threads)
-                    except Exception:
-                        pass
-                    throttle_multiplier *= 1.15
+            # Apply simulated thermal throttling when requested
+            if simulate_throttling and i % 10 == 0:
+                current_threads = max(1, current_threads - 1)
+                backend.set_threads(current_threads)
+                throttle_multiplier *= 1.15
     except MemoryError:
         print(json.dumps({
             "status": "oom",
