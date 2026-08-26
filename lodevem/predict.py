@@ -183,6 +183,3 @@ def load_model(model_path: str | Path) -> Any:
         raise RuntimeError(f"Failed to load model from '{model_path}': {e}") from e
 
 
-def get_model_size_mb(model_path: str | Path) -> float:
-    """Return the size of a model file in megabytes."""
-    return round(Path(model_path).stat().st_size / (1024 * 1024), 2)

@@ -34,10 +34,50 @@ from rich.progress import (
 
 from lodevem import profiles as profile_loader
 from lodevem.measure import build_image, measure_memory, _docker_available
-from lodevem.predict import load_model, predict_latency, get_model_size_mb
+from lodevem.predict import load_model, predict_latency
+from lodevem.preflight import PreFlightAnalyzer
 from lodevem.profiles import DeviceProfile
 
 logger = logging.getLogger(__name__)
+
+
+def _create_result_record(
+    model_label: str,
+    model_size_mb: float,
+    profile: DeviceProfile,
+    preflight_status: str,
+    preflight_reason: str,
+    estimated_memory_mb: float,
+    prediction_status: str | None = None,
+    predicted_latency_ms: float | None = None,
+    measure_status: str | None = None,
+    fits_in_ram: bool = False,
+    peak_ram_mb: float | None = None,
+    measured_latency_ms: float | None = None,
+    measured_p95_ms: float | None = None,
+    error: str | None = None,
+) -> dict:
+    return {
+        "model_file": model_label,
+        "model_size_mb": model_size_mb,
+        "device_id": profile.id,
+        "device_name": profile.name,
+        "tier": profile.tier,
+        "tier_label": profile.tier_label,
+        "core_type": profile.core_type,
+        "ram_limit_mb": profile.ram_mb,
+        "preflight_status": preflight_status,
+        "preflight_reason": preflight_reason,
+        "estimated_memory_mb": estimated_memory_mb,
+        "predicted_latency_ms": predicted_latency_ms,
+        "prediction_status": prediction_status,
+        "peak_ram_mb": peak_ram_mb,
+        "measured_latency_ms": measured_latency_ms,
+        "measured_p95_ms": measured_p95_ms,
+        "fits_in_ram": fits_in_ram,
+        "measure_status": measure_status,
+        "error": error,
+    }
 
 
 def run_benchmark(
@@ -100,7 +140,6 @@ def run_benchmark(
         for model_path in model_paths:
             model_path = Path(model_path)
             model_label = model_path.name   # e.g. "cocoa_int8.pt"
-            model_size_mb = get_model_size_mb(model_path)
 
             # Load the model for nn-Meter (latency prediction only)
             # This happens on the host — not inside Docker.
@@ -115,7 +154,29 @@ def run_benchmark(
                     description=f"{model_label} → {profile.name}"
                 )
 
-                # --- Step 1: Predict latency (nn-Meter, runs on host) ---
+                # --- Step 0: Pre-Flight Analysis ---
+                preflight_result = PreFlightAnalyzer.analyze(model_path, profile.ram_mb)
+                model_size_mb = preflight_result["model_size_mb"]
+                estimated_memory_mb = preflight_result["estimated_memory_mb"]
+                preflight_status = preflight_result["preflight_status"]
+                preflight_reason = preflight_result["preflight_reason"]
+
+                if preflight_status == "preflight_oom":
+                    # Skip execution and return an immediate OOM record
+                    results.append(_create_result_record(
+                        model_label=model_label,
+                        model_size_mb=model_size_mb,
+                        profile=profile,
+                        preflight_status=preflight_status,
+                        preflight_reason=preflight_reason,
+                        estimated_memory_mb=estimated_memory_mb,
+                        measure_status="skipped (pre-flight oom)",
+                        fits_in_ram=False,
+                        error="Skipped due to pre-flight OOM estimate."
+                    ))
+                    progress.advance(task)
+                    continue
+
                 # --- Step 1: Predict latency (nn-Meter, runs on host) ---
                 if no_predict:
                     predicted_latency_ms = None
@@ -147,35 +208,27 @@ def run_benchmark(
                         "fits_in_ram": False,
                         "peak_ram_mb": None,
                         "median_latency_ms": None,
+                        "p95_latency_ms": None,
                         "error": str(e),
                     }
 
                 # --- Combine into one result record ---
-                result = {
-                    # Model info
-                    "model_file":          model_label,
-                    "model_size_mb":       model_size_mb,
-
-                    # Device info
-                    "device_id":           profile.id,
-                    "device_name":         profile.name,
-                    "tier":                profile.tier,
-                    "tier_label":          profile.tier_label,
-                    "core_type":           profile.core_type,
-                    "ram_limit_mb":        profile.ram_mb,
-
-                    # Latency (from nn-Meter)
-                    "predicted_latency_ms": predicted_latency_ms,
-                    "prediction_status":    prediction_status,
-
-                    # Memory / measured latency
-                    "peak_ram_mb":          mem_result.get("peak_ram_mb"),
-                    "measured_latency_ms":  mem_result.get("median_latency_ms"),
-                    "measured_p95_ms":      mem_result.get("p95_latency_ms"),
-                    "fits_in_ram":          mem_result.get("fits_in_ram", False),
-                    "measure_status":       mem_result.get("status"),
-                    "error":                mem_result.get("error"),
-                }
+                result = _create_result_record(
+                    model_label=model_label,
+                    model_size_mb=model_size_mb,
+                    profile=profile,
+                    preflight_status=preflight_status,
+                    preflight_reason=preflight_reason,
+                    estimated_memory_mb=estimated_memory_mb,
+                    prediction_status=prediction_status,
+                    predicted_latency_ms=predicted_latency_ms,
+                    measure_status=mem_result.get("status"),
+                    fits_in_ram=mem_result.get("fits_in_ram", False),
+                    peak_ram_mb=mem_result.get("peak_ram_mb"),
+                    measured_latency_ms=mem_result.get("median_latency_ms"),
+                    measured_p95_ms=mem_result.get("p95_latency_ms"),
+                    error=mem_result.get("error"),
+                )
 
                 results.append(result)
                 progress.advance(task)

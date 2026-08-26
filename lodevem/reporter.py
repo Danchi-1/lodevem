@@ -53,8 +53,10 @@ def _format_ram(value_mb: float | None) -> str:
     return f"{value_mb:.1f} MB"
 
 
-def _fits_symbol(fits: bool, status: str) -> str:
+def _fits_symbol(fits: bool, status: str, preflight_status: str | None = None) -> str:
     """Green tick or red cross with OOM label."""
+    if preflight_status == "preflight_oom":
+        return "[red]✗ PRE-OOM[/red]"
     if status == "oom":
         return "[red]✗ OOM[/red]"
     if fits:
@@ -103,14 +105,14 @@ def print_table(results: list[dict]) -> None:
             f"{r['ram_limit_mb']} MB",
             _format_latency(r.get("predicted_latency_ms")),
             _format_ram(r.get("peak_ram_mb")),
-            _fits_symbol(r.get("fits_in_ram", False), r.get("measure_status", "")),
+            _fits_symbol(r.get("fits_in_ram", False), r.get("measure_status", ""), r.get("preflight_status")),
         )
 
     console.print(table)
 
     # Summary line
     total = len(results)
-    oom_count = sum(1 for r in results if r.get("measure_status") == "oom")
+    oom_count = sum(1 for r in results if r.get("measure_status") == "oom" or r.get("preflight_status") == "preflight_oom")
     ok_count = sum(1 for r in results if r.get("measure_status") == "ok")
 
     console.print(
@@ -140,7 +142,6 @@ def save_csv(results: list[dict], output_path: str | Path | None = None) -> Path
 
     output_path = Path(output_path)
 
-    # Define the columns we want in the CSV (in order)
     fieldnames = [
         "model_file",
         "model_size_mb",
@@ -149,6 +150,8 @@ def save_csv(results: list[dict], output_path: str | Path | None = None) -> Path
         "tier_label",
         "core_type",
         "ram_limit_mb",
+        "preflight_status",
+        "estimated_memory_mb",
         "predicted_latency_ms",
         "peak_ram_mb",
         "fits_in_ram",
