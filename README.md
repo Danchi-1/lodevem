@@ -10,7 +10,7 @@
 
 ## What It Does
 
-`lodevem` answers the question: *"If a farmer in rural Ghana with a Nokia C1 (1GB RAM) runs my cocoa disease model, will it work? How fast? Will it crash?"*
+`lodevem` answers the question: *"If a farmer in rural Ghana with a Nokia C1 (1GB RAM) runs my cocoa disease model, will it work? How fast? Will it crash?"* Or, *"Can this $100 budget Android phone generate tokens from a quantized 2B parameter LLM without running out of memory?"*
 
 You bring your model files (already compressed however you like). lodevem benchmarks each one against a library of 16 real device profiles spanning budget Android phones, Android Go devices, and KaiOS feature phones — and produces a results table ready for your paper.
 
@@ -21,7 +21,7 @@ You bring your model files (already compressed however you like). lodevem benchm
 ## How It Works
 
 ```
-Your .pt model files  (cocoa_fp32.pt, cocoa_int8.pt, ...)
+Your .pt model files  (cocoa_fp32.pt, cocoa_int8.pt, tiny_llm.pt ...)
               │
               ▼
     ┌─────────────────┐
@@ -39,6 +39,8 @@ Latency Prediction    RAM Measurement
       Results Table
    (console + CSV file)
 ```
+
+**New in 0.2.0:** Full support for Large Language Models (LLMs) via Hugging Face. Automatically measures Time-To-First-Token (TTFT) and Tokens-Per-Second (TPS) on simulated budget devices.
 
 ### Two measurement modes — selected automatically
 
@@ -132,6 +134,19 @@ torch.save(model, "my_model.pt")
 ```
 `lodevem` will automatically detect `model.expected_input_shape` and use it if you omit the CLI flag.
 
+### Benchmarking LLMs (New in v0.2.0)
+
+If you provide a Hugging Face Causal LM directory, `lodevem` automatically switches into generative mode to measure true Token-Level metrics:
+
+```bash
+lodevem start models/quantized-llama-1.5b/ --prompt "Write a poem about farming" --max-new-tokens 50
+```
+
+This bypasses nn-Meter and runs a true autoregressive KV-cache simulation inside the memory-capped container to report:
+- **TTFT (Time-To-First-Token)**
+- **TPS (Tokens-Per-Second)**
+- True peak RAM (capturing KV-cache high water marks)
+
 ### Fast Memory Checks / Skipping Latency
 
 If you don't care about predicting inference latency and just want to know **"Does my model fit in this device's RAM?"**, you can completely skip the 376MB `nn-meter` predictor download and vastly speed up the process by running the model only 1 time:
@@ -187,6 +202,10 @@ lodevem start  MODEL [MODEL ...]   One or more .pt model files to benchmark
                --tier TIER         Run against a full tier (tier1 | tier2 | tier3)
                --warmup N          Warmup passes before timing (default: 5)
                --runs N            Timed inference passes (default: 50)
+               --input-shape S     Custom input shape e.g. 1,3,224,224
+               --prompt STR        Prompt for LLM benchmarking
+               --max-new-tokens N  Tokens to generate for LLM metrics (default: 20)
+               --no-predict        Skip latency prediction (fast memory check only)
                --output PATH       Save CSV results to this path
 
 lodevem list   [--tier TIER]       List all available device profiles
@@ -240,13 +259,12 @@ These profiles test the **absolute RAM floor**. PyTorch cannot load natively on 
 ## Benchmark Output
 
 ```
-Model File         | Device              | Tier | RAM Limit | Latency (pred.) | Peak RAM (meas.) | Fits
--------------------|---------------------|------|-----------|-----------------|------------------|------
-cocoa_fp32.pt      | Tecno Spark 8       | 1    | 2048 MB   | 847ms           | 42.3 MB          | ✓
-cocoa_fp32.pt      | Nokia C1 (Go)       | 2    | 1024 MB   | 2389ms          | 42.3 MB          | ✓
-cocoa_fp32.pt      | JioPhone 2 (KaiOS)  | 3    | 512 MB    | 5104ms          | 42.3 MB          | ✓
-cocoa_int8.pt      | Tecno Spark 8       | 1    | 2048 MB   | 312ms           | 11.2 MB          | ✓
-cocoa_int8.pt      | Nokia 8110 4G       | 3    | 256 MB    | —               | —                | ✗ OOM
+Model File         | Device              | Tier | RAM Limit | Latency (pred.) | TTFT   | TPS     | Peak RAM (meas.) | Fits
+-------------------|---------------------|------|-----------|-----------------|--------|---------|------------------|------
+cocoa_fp32.pt      | Tecno Spark 8       | 1    | 2048 MB   | 847ms           | —      | —       | 42.3 MB          | ✓
+cocoa_fp32.pt      | Nokia C1 (Go)       | 2    | 1024 MB   | 2389ms          | —      | —       | 42.3 MB          | ✓
+cocoa_int8.pt      | Nokia 8110 4G       | 3    | 256 MB    | —               | —      | —       | —                | ✗ OOM
+tiny_llm_q4        | Tecno Spark 8       | 1    | 2048 MB   | —               | 1.2s   | 6.4 t/s | 980.5 MB         | ✓
 ```
 
 Results are also saved to `results/benchmark_<timestamp>.csv`.
@@ -259,17 +277,19 @@ Results are also saved to `results/benchmark_<timestamp>.csv`.
 
 Predicted using **nn-Meter** (Zhang et al., 2021) — a kernel-level latency predictor trained on real hardware measurements. lodevem uses the `cortexA76cpu_tflite21` predictor as a base and applies per-profile scaling factors to estimate performance on Cortex-A53, A55, and A7 cores (sourced from ARM's published performance data).
 
+For **LLMs**, nn-Meter is bypassed and true Token-level metrics (TTFT, TPS) are measured directly via a simulated autoregressive generation loop.
+
 > Zhang, L., et al. *nn-Meter: Towards Accurate Latency Prediction of Deep-Learning Model Inference on Diverse Edge Devices*. MobiSys 2021. https://github.com/microsoft/nn-Meter
 
 ### Memory
 
-**Lite mode:** Measured via `psutil.Process.memory_info().rss` during inference. Reports actual peak RAM and flags whether it exceeds the device profile's limit.
+**Lite mode:** Measured via OS-level memory utilities during inference. Uses `resource.getrusage()` on Linux for true process peak RAM high-water marks (capturing exact KV-cache spikes for LLMs), falling back to `psutil.Process.memory_info().rss` polling. 
 
 **Full mode (Docker):** Measured inside a cgroup v2-constrained container with `memory.max` set to the device profile's RAM. True OOM events are detected via kernel kill signal 137.
 
 ### Suggested paper methods statement
 
-> *Hardware simulation was performed using lodevem v0.1.0 [cite], which predicts inference latency via nn-Meter [cite] and measures memory footprint under psutil/Docker RAM constraints matching each target device profile. All results are reproducible via `pip install lodevem`.*
+> *Hardware simulation was performed using lodevem v0.2.0 [cite], which predicts inference latency via nn-Meter [cite] and measures memory footprint under psutil/Docker RAM constraints matching each target device profile. All results are reproducible via `pip install lodevem`.*
 
 ---
 
