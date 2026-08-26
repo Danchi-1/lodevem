@@ -36,9 +36,9 @@ dependencies = [
 docker = ["docker>=7.0"]
 pytorch = ["torch>=2.0", "torchvision>=0.15", "nn-meter>=1.4"]
 hf = ["transformers>=4.0", "accelerate>=0.20"]
-sklearn = ["scikit-learn>=1.0", "hummingbird-ml>=0.4"]
+sklearn = ["scikit-learn>=1.0", "hummingbird-ml>=0.4", "joblib>=1.3"]
 onnx = ["onnxruntime>=1.15"]
-all = ["docker>=7.0", "torch>=2.0", "torchvision>=0.15", "nn-meter>=1.4", "transformers>=4.0", "accelerate>=0.20", "scikit-learn>=1.0", "hummingbird-ml>=0.4", "onnxruntime>=1.15"]
+all = ["docker>=7.0", "torch>=2.0", "torchvision>=0.15", "nn-meter>=1.4", "transformers>=4.0", "accelerate>=0.20", "scikit-learn>=1.0", "hummingbird-ml>=0.4", "joblib>=1.3", "onnxruntime>=1.15"]
 
 [project.urls]
 Homepage = "https://github.com/Danchi-1/lodevem"
