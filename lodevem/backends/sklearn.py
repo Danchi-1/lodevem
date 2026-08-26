@@ -50,7 +50,7 @@ class SklearnBackend(BenchmarkBackend):
         except Exception as e:
             raise RuntimeError(f"Failed to load Sklearn model from '{path}': {e}") from e
 
-    def generate_inputs(self, shape: tuple[int, ...] | None) -> Any:
+    def generate_inputs(self, shape: tuple[int, ...] | None, **kwargs) -> Any:
         import torch
         
         batch_size = shape[0] if shape else 1

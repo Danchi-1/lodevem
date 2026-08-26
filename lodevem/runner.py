@@ -90,6 +90,8 @@ def run_benchmark(
     simulate_throttling: bool = False,
     no_predict: bool = False,
     input_shape: tuple[int, ...] = (1, 3, 224, 224),
+    prompt: str | None = None,
+    max_new_tokens: int = 20,
 ) -> list[dict]:
     """
     Run the full benchmark: all models × selected device profiles.
@@ -186,6 +188,9 @@ def run_benchmark(
                 if no_predict or backend is None:
                     predicted_latency_ms = None
                     prediction_status = "skipped (no backend)" if backend is None and not no_predict else "skipped"
+                elif backend.is_llm():
+                    predicted_latency_ms = None
+                    prediction_status = "unsupported (llm)"
                 else:
                     try:
                         latency_result = predict_latency(backend, profile, input_shape=input_shape)

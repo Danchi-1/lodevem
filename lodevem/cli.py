@@ -339,6 +339,19 @@ examples:
         metavar="PATH",
         help="Save CSV results to this path (default: ./results/benchmark_<timestamp>.csv)",
     )
+    start_parser.add_argument(
+        "--prompt",
+        metavar="TEXT",
+        type=str,
+        help="Prompt text for LLM benchmarking",
+    )
+    start_parser.add_argument(
+        "--max-new-tokens",
+        type=int,
+        default=20,
+        metavar="N",
+        help="Max tokens to generate for LLM benchmarking (default: 20)",
+    )
     start_parser.set_defaults(func=cmd_start)
 
     # --- list ---

@@ -29,7 +29,7 @@ class BenchmarkBackend(abc.ABC):
         pass
 
     @abc.abstractmethod
-    def generate_inputs(self, shape: tuple[int, ...] | None) -> Any:
+    def generate_inputs(self, shape: tuple[int, ...] | None, **kwargs) -> Any:
         """
         Generate dummy inputs suitable for this backend.
         The shape tuple is provided by the user CLI, but backends may override
@@ -51,3 +51,26 @@ class BenchmarkBackend(abc.ABC):
         Defaults to a no-op if the backend doesn't support thread control.
         """
         pass
+
+    def is_llm(self) -> bool:
+        """
+        Return True if this backend is currently loaded with an LLM and supports LLM metrics.
+        """
+        return False
+        
+    def execute_llm(self, inputs: Any, max_new_tokens: int) -> dict:
+        """
+        Perform an autoregressive generation loop.
+        
+        Returns:
+            dict with strict schema:
+            {
+                "ttft_ms": float,
+                "decode_time_ms": float,
+                "tps": float | None,
+                "generated_tokens": int,
+                "prompt_length": int,
+                "peak_ram_mb": float
+            }
+        """
+        raise NotImplementedError("LLM generation is not supported by this backend.")

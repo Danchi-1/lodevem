@@ -54,7 +54,7 @@ class ONNXBackend(BenchmarkBackend):
         except Exception as e:
             raise RuntimeError(f"Failed to load ONNX model from '{path}': {e}") from e
 
-    def generate_inputs(self, shape: tuple[int, ...] | None) -> Any:
+    def generate_inputs(self, shape: tuple[int, ...] | None, **kwargs) -> Any:
         import numpy as np
         
         inputs = {}

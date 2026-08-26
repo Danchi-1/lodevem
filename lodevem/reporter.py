@@ -85,9 +85,11 @@ def print_table(results: list[dict]) -> None:
     table.add_column("Device",             style="white",   min_width=20)
     table.add_column("Tier",               style="dim",     min_width=6,  justify="center")
     table.add_column("RAM Limit",          style="dim",     min_width=8,  justify="right")
-    table.add_column("Latency (pred.)",    style="yellow",  min_width=14, justify="right")
-    table.add_column("Peak RAM (meas.)",   style="magenta", min_width=14, justify="right")
-    table.add_column("Fits in RAM",        min_width=10,    justify="center")
+    table.add_column("Latency (pred)",     style="yellow",  min_width=14, justify="right")
+    table.add_column("TTFT (ms)",          style="yellow",  min_width=10, justify="right")
+    table.add_column("Speed (TPS)",        style="yellow",  min_width=11, justify="right")
+    table.add_column("Peak RAM (meas)",    style="magenta", min_width=15, justify="right")
+    table.add_column("Fits in RAM",        min_width=11,    justify="center")
 
     current_tier = None
     for r in sorted(results, key=lambda x: (x["tier"], x["model_file"], x["device_name"])):
@@ -98,12 +100,19 @@ def print_table(results: list[dict]) -> None:
                 table.add_section()
             current_tier = r["tier"]
 
+        is_llm_row = "median_ttft_ms" in r and r["median_ttft_ms"] is not None
+        latency_str = "" if is_llm_row else _format_latency(r.get("predicted_latency_ms"))
+        ttft_str = _format_latency(r.get("median_ttft_ms")) if is_llm_row else ""
+        tps_str = f"{r.get('median_tps'):.1f} t/s" if is_llm_row and r.get("median_tps") is not None else ""
+
         table.add_row(
             r["model_file"],
             r["device_name"],
             str(r["tier"]),
             f"{r['ram_limit_mb']} MB",
-            _format_latency(r.get("predicted_latency_ms")),
+            latency_str,
+            ttft_str,
+            tps_str,
             _format_ram(r.get("peak_ram_mb")),
             _fits_symbol(r.get("fits_in_ram", False), r.get("measure_status", ""), r.get("preflight_status")),
         )
@@ -153,6 +162,12 @@ def save_csv(results: list[dict], output_path: str | Path | None = None) -> Path
         "preflight_status",
         "estimated_memory_mb",
         "predicted_latency_ms",
+        "median_latency_ms",
+        "median_ttft_ms",
+        "decode_time_ms",
+        "median_tps",
+        "generated_tokens",
+        "prompt_length",
         "peak_ram_mb",
         "fits_in_ram",
         "measure_status",

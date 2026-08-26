@@ -83,6 +83,9 @@ def _run_lite_subprocess(
     ]
     if simulate_throttling:
         cmd.append("--simulate-throttling")
+    if prompt:
+        cmd.extend(["--prompt", prompt])
+    cmd.extend(["--max-new-tokens", str(max_new_tokens)])
 
     completed = subprocess.run(cmd, capture_output=True, text=True)
     if completed.returncode != 0:
@@ -111,6 +114,8 @@ def measure_memory_lite(
     timed_runs: int = 50,
     simulate_throttling: bool = False,
     input_shape: tuple[int, ...] = (1, 3, 224, 224),
+    prompt: str | None = None,
+    max_new_tokens: int = 20,
 ) -> dict:
     """
     Measure memory using an isolated worker process — no Docker required.
@@ -124,7 +129,7 @@ def measure_memory_lite(
     measurement.
     """
     try:
-        return _run_lite_subprocess(model_path, profile, warmup_runs, timed_runs, simulate_throttling, input_shape)
+        return _run_lite_subprocess(model_path, profile, warmup_runs, timed_runs, simulate_throttling, input_shape, prompt, max_new_tokens)
     except Exception as e:
         logger.warning(
             "Lite subprocess worker unavailable, falling back to in-process lite mode: %s",
@@ -146,18 +151,68 @@ def measure_memory_lite(
         return {"status": "error", "error": f"Failed to load backend: {e}"}
 
     try:
-        dummy_input = backend.generate_inputs(input_shape)
+        dummy_input = backend.generate_inputs(input_shape, prompt=prompt)
     except Exception as e:
         return {"status": "error", "error": f"Failed to generate inputs: {e}"}
 
     # Warmup
     try:
         for _ in range(warmup_runs):
-            _ = backend.execute(dummy_input)
+            if backend.is_llm():
+                _ = backend.execute_llm(dummy_input, max_new_tokens)
+            else:
+                _ = backend.execute(dummy_input)
     except Exception as e:
         return {"status": "error", "error": f"Inference failed during warmup: {e}"}
 
-    # Timed + memory measurement
+    if backend.is_llm():
+        # LLM Timed Measurement
+        results_list = []
+        throttle_multiplier = 1.0
+        current_threads = profile.cores
+        backend.set_threads(current_threads)
+        
+        for i in range(1, timed_runs + 1):
+            if simulate_throttling:
+                if i % 10 == 0:
+                    current_threads = max(1, current_threads - 1)
+                    backend.set_threads(current_threads)
+                    throttle_multiplier *= 1.15
+                    
+            res = backend.execute_llm(dummy_input, max_new_tokens)
+            # Apply throttling manually to the returned times
+            res["ttft_ms"] *= throttle_multiplier
+            res["decode_time_ms"] *= throttle_multiplier
+            if res["tps"] is not None:
+                res["tps"] /= throttle_multiplier
+                
+            # Sample peak ram
+            ram_mb = process.memory_info().rss / (1024 * 1024)
+            res["peak_ram_mb"] = max(res["peak_ram_mb"], ram_mb)
+            results_list.append(res)
+            
+        # Aggregate LLM stats
+        results_list.sort(key=lambda x: x["ttft_ms"])
+        n = len(results_list)
+        mid = results_list[n // 2]
+        
+        peak_ram_mb = max(r["peak_ram_mb"] for r in results_list)
+        fits = peak_ram_mb <= profile.ram_mb
+        
+        return {
+            "status": "ok",
+            "mode": "lite",
+            "peak_ram_mb": round(peak_ram_mb, 2),
+            "median_ttft_ms": round(mid["ttft_ms"], 2),
+            "median_tps": round(mid["tps"], 2) if mid["tps"] else None,
+            "median_latency_ms": None,
+            "generated_tokens": mid["generated_tokens"],
+            "prompt_length": mid["prompt_length"],
+            "fits_in_ram": fits,
+            "ram_limit_mb": profile.ram_mb,
+        }
+
+    # Standard Timed + memory measurement
     latencies_ms = []
     peak_ram_mb = 0.0
 
@@ -263,6 +318,8 @@ def measure_memory(
     timed_runs: int = 50,
     simulate_throttling: bool = False,
     input_shape: tuple[int, ...] = (1, 3, 224, 224),
+    prompt: str | None = None,
+    max_new_tokens: int = 20,
 ) -> dict:
     """
     Measure peak RAM and latency — automatically chooses the right mode.
@@ -284,7 +341,7 @@ def measure_memory(
                 "  For exact container enforcement, run on a Linux machine with Docker.\n"
             )
             _lite_mode_noticed = True
-        return measure_memory_lite(model_path, profile, warmup_runs, timed_runs, simulate_throttling, input_shape)
+        return measure_memory_lite(model_path, profile, warmup_runs, timed_runs, simulate_throttling, input_shape, prompt, max_new_tokens)
 
     # --- Full Docker mode ---
     client = _get_docker_client()
@@ -301,9 +358,19 @@ def measure_memory(
     )
 
     try:
+        cmd_args = [
+            container_model_path,
+            str(warmup_runs),
+            str(timed_runs),
+            ",".join(map(str, input_shape)),
+            "--max-new-tokens", str(max_new_tokens),
+        ]
+        if prompt:
+            cmd_args.extend(["--prompt", prompt])
+
         result = client.containers.run(
             image=DOCKER_IMAGE_NAME,
-            command=[container_model_path, str(warmup_runs), str(timed_runs), ",".join(map(str, input_shape))],
+            command=cmd_args,
             volumes={
                 str(model_path.parent): {"bind": "/models", "mode": "ro"}
             },
@@ -365,6 +432,8 @@ def _lite_worker(
     timed_runs: int,
     simulate_throttling: bool = False,
     input_shape: tuple[int, ...] = (1, 3, 224, 224),
+    prompt: str | None = None,
+    max_new_tokens: int = 20,
 ) -> None:
     import json
     import time
@@ -385,7 +454,7 @@ def _lite_worker(
     backend.set_threads(num_threads)
 
     try:
-        dummy_input = backend.generate_inputs(input_shape)
+        dummy_input = backend.generate_inputs(input_shape, prompt=prompt)
     except Exception as e:
         print(json.dumps({"status": "error", "error": f"Failed to generate inputs: {e}"}))
         sys.exit(1)
@@ -395,7 +464,52 @@ def _lite_worker(
 
     try:
         for _ in range(warmup_runs):
-            _ = backend.execute(dummy_input)
+            if backend.is_llm():
+                _ = backend.execute_llm(dummy_input, max_new_tokens)
+            else:
+                _ = backend.execute(dummy_input)
+
+        if backend.is_llm():
+            results_list = []
+            throttle_multiplier = 1.0
+            current_threads = num_threads
+            
+            for i in range(1, timed_runs + 1):
+                if simulate_throttling and i % 10 == 0:
+                    current_threads = max(1, current_threads - 1)
+                    backend.set_threads(current_threads)
+                    throttle_multiplier *= 1.15
+                    
+                res = backend.execute_llm(dummy_input, max_new_tokens)
+                res["ttft_ms"] *= throttle_multiplier
+                res["decode_time_ms"] *= throttle_multiplier
+                if res["tps"] is not None:
+                    res["tps"] /= throttle_multiplier
+                    
+                rss = _read_rss_kb()
+                res["peak_ram_mb"] = max(res["peak_ram_mb"], rss / 1024.0)
+                results_list.append(res)
+                
+            results_list.sort(key=lambda x: x["ttft_ms"])
+            n = len(results_list)
+            mid = results_list[n // 2]
+            
+            peak_ram_mb = max(r["peak_ram_mb"] for r in results_list)
+            result = {
+                "status": "ok",
+                "peak_ram_mb": round(peak_ram_mb, 2),
+                "median_latency_ms": None,
+                "median_ttft_ms": round(mid["ttft_ms"], 2),
+                "median_tps": round(mid["tps"], 2) if mid["tps"] else None,
+                "generated_tokens": mid["generated_tokens"],
+                "prompt_length": mid["prompt_length"],
+                "timed_runs": timed_runs,
+                "warmup_runs": warmup_runs,
+            }
+            print(json.dumps(result))
+            sys.exit(0)
+
+        # Standard execution
 
         # Thermal throttling simulation variables
         throttle_multiplier = 1.0
@@ -454,11 +568,17 @@ if __name__ == "__main__":
     parser.add_argument("warmup_runs", nargs="?", type=int, help="Warmup run count")
     parser.add_argument("timed_runs", nargs="?", type=int, help="Timed run count")
     parser.add_argument("input_shape_str", nargs="?", default="1,3,224,224", help="Input shape as comma-separated integers")
+    parser.add_argument("--prompt", type=str, default=None, help="Prompt for LLM generation")
+    parser.add_argument("--max-new-tokens", type=int, default=20, help="Max tokens to generate")
     args = parser.parse_args()
 
     if args.lite_worker:
         if not args.model_path or args.ram_limit_mb is None or args.num_threads is None or args.warmup_runs is None or args.timed_runs is None:
             print(json.dumps({"status": "error", "error": "Missing lite worker arguments"}))
+            sys.exit(1)
+            
+        if args.max_new_tokens <= 0:
+            print(json.dumps({"status": "error", "error": "max-new-tokens must be positive"}))
             sys.exit(1)
             
         input_shape = tuple(map(int, args.input_shape_str.split(",")))
@@ -471,6 +591,8 @@ if __name__ == "__main__":
             args.timed_runs,
             simulate_throttling=args.simulate_throttling,
             input_shape=input_shape,
+            prompt=args.prompt,
+            max_new_tokens=args.max_new_tokens,
         )
     else:
         parser.print_help()

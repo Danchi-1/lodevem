@@ -43,41 +43,59 @@ def read_rss_kb() -> int:
     return 0
 
 
-def run_benchmark(model_path: str, warmup_runs: int, timed_runs: int, input_shape: tuple[int, ...] = (1, 3, 224, 224)) -> dict:
-    """
-    Load the model and measure inference latency + peak memory.
-
-    We track peak RSS across all inference calls, not just one,
-    because PyTorch may allocate additional memory during inference
-    (e.g. activation buffers, gradient buffers).
-    """
+def run_benchmark(model_path: str, warmup_runs: int, timed_runs: int, input_shape: tuple[int, ...], prompt: str | None = None, max_new_tokens: int = 20) -> dict:
     try:
         from lodevem.backends import get_backend
     except ImportError as e:
         return {"status": "error", "error": f"Missing dependency: {e}"}
 
-    # --- Load model ---
     try:
         backend = get_backend(model_path)
     except Exception as e:
         return {"status": "error", "error": f"Failed to load backend: {e}"}
 
-    # --- Prepare input ---
     try:
-        dummy_input = backend.generate_inputs(input_shape)
+        dummy_input = backend.generate_inputs(input_shape, prompt=prompt)
     except Exception as e:
         return {"status": "error", "error": f"Failed to generate inputs: {e}"}
 
-    # --- Warmup passes ---
-    # The first few inference calls are slower because the backend may be
-    # setting up internal buffers. Warmup runs let us measure steady state.
     try:
         for _ in range(warmup_runs):
-            _ = backend.execute(dummy_input)
+            if backend.is_llm():
+                _ = backend.execute_llm(dummy_input, max_new_tokens)
+            else:
+                _ = backend.execute(dummy_input)
     except Exception as e:
         return {"status": "error", "error": f"Inference failed during warmup: {e}"}
 
-    # --- Timed runs ---
+    if backend.is_llm():
+        results_list = []
+        try:
+            for _ in range(timed_runs):
+                res = backend.execute_llm(dummy_input, max_new_tokens)
+                res["peak_ram_mb"] = max(res["peak_ram_mb"], read_rss_kb() / 1024.0)
+                results_list.append(res)
+        except Exception as e:
+            return {"status": "error", "error": f"LLM inference failed: {e}"}
+            
+        results_list.sort(key=lambda x: x["ttft_ms"])
+        n = len(results_list)
+        mid = results_list[n // 2]
+        peak_ram_mb = max(r["peak_ram_mb"] for r in results_list)
+        
+        return {
+            "status": "ok",
+            "peak_ram_mb": round(peak_ram_mb, 2),
+            "median_latency_ms": None,
+            "median_ttft_ms": round(mid["ttft_ms"], 2),
+            "median_tps": round(mid["tps"], 2) if mid["tps"] else None,
+            "generated_tokens": mid["generated_tokens"],
+            "prompt_length": mid["prompt_length"],
+            "timed_runs": timed_runs,
+            "warmup_runs": warmup_runs,
+        }
+
+    # Standard Timed runs
     latencies_ms = []
     peak_rss_kb = 0
 
@@ -96,7 +114,6 @@ def run_benchmark(model_path: str, warmup_runs: int, timed_runs: int, input_shap
     except Exception as e:
         return {"status": "error", "error": f"Inference failed during timed runs: {e}"}
 
-    # Sort latencies to compute percentiles
     latencies_ms.sort()
     n = len(latencies_ms)
 
@@ -111,31 +128,22 @@ def run_benchmark(model_path: str, warmup_runs: int, timed_runs: int, input_shap
         "warmup_runs": warmup_runs,
     }
 
-
 if __name__ == "__main__":
-    # Arguments passed in by measure.py when it starts the container:
-    # sys.argv[1] = path to the model file (inside the container)
-    # sys.argv[2] = number of warmup runs
-    # sys.argv[3] = number of timed runs
+    import argparse
+    parser = argparse.ArgumentParser()
+    parser.add_argument("model_path")
+    parser.add_argument("warmup_runs", type=int)
+    parser.add_argument("timed_runs", type=int)
+    parser.add_argument("input_shape_str", nargs="?", default="1,3,224,224")
+    parser.add_argument("--prompt", type=str, default=None)
+    parser.add_argument("--max-new-tokens", type=int, default=20)
+    args = parser.parse_args()
 
-    if len(sys.argv) < 4:
-        print(json.dumps({
-            "status": "error",
-            "error": "Usage: container_measure.py <model_path> <warmup_runs> <timed_runs>"
-        }))
-        sys.exit(1)
-
-    model_path = sys.argv[1]
-    warmup_runs = int(sys.argv[2])
-    timed_runs = int(sys.argv[3])
-    input_shape_str = sys.argv[4] if len(sys.argv) > 4 else "1,3,224,224"
-    input_shape = tuple(map(int, input_shape_str.split(",")))
+    input_shape = tuple(map(int, args.input_shape_str.split(",")))
 
     try:
-        result = run_benchmark(model_path, warmup_runs, timed_runs, input_shape)
+        result = run_benchmark(args.model_path, args.warmup_runs, args.timed_runs, input_shape, args.prompt, args.max_new_tokens)
     except MemoryError:
-        # If the container hits the RAM cap, Python raises MemoryError.
-        # We catch it here and report OOM cleanly rather than crashing.
         result = {
             "status": "oom",
             "error": "Out of memory — model could not be loaded within the RAM limit.",
@@ -147,5 +155,4 @@ if __name__ == "__main__":
             "traceback": traceback.format_exc(),
         }
 
-    # Print result as JSON — measure.py on the host reads this from stdout
     print(json.dumps(result))

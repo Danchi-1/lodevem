@@ -12,11 +12,13 @@ ENV PYTHONDONTWRITEBYTECODE=1
 ENV PYTHONUNBUFFERED=1
 ENV PYTHONPATH=/app
 
-# PyTorch CPU-only and ONNX Runtime
+# PyTorch CPU-only, ONNX Runtime, and Hugging Face
 RUN pip install --no-cache-dir \
     torch==2.3.0+cpu \
     torchvision==0.18.0+cpu \
     onnxruntime==1.17.1 \
+    transformers==4.38.0 \
+    accelerate==0.27.2 \
     --extra-index-url https://download.pytorch.org/whl/cpu
 
 # Copy the entire lodevem package so container_measure can access lodevem.backends

@@ -42,7 +42,7 @@ class PyTorchBackend(BenchmarkBackend):
         except Exception as e:
             raise RuntimeError(f"Failed to load PyTorch model from '{path}': {e}") from e
 
-    def generate_inputs(self, shape: tuple[int, ...] | None) -> Any:
+    def generate_inputs(self, shape: tuple[int, ...] | None, **kwargs) -> Any:
         import torch
         # Use model-embedded shape if available, otherwise fallback to provided shape
         shape_to_use = getattr(self.model, "expected_input_shape", shape)
