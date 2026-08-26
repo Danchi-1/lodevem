@@ -10,16 +10,18 @@ FROM python:3.11-slim
 
 ENV PYTHONDONTWRITEBYTECODE=1
 ENV PYTHONUNBUFFERED=1
+ENV PYTHONPATH=/app
 
-# PyTorch CPU-only — significantly smaller than the CUDA build
+# PyTorch CPU-only and ONNX Runtime
 RUN pip install --no-cache-dir \
     torch==2.3.0+cpu \
     torchvision==0.18.0+cpu \
-    --index-url https://download.pytorch.org/whl/cpu
+    onnxruntime==1.17.1 \
+    --extra-index-url https://download.pytorch.org/whl/cpu
 
-# container_measure.py lives alongside this Dockerfile inside the package
-COPY container_measure.py /app/container_measure.py
+# Copy the entire lodevem package so container_measure can access lodevem.backends
+COPY . /app/lodevem
 
 WORKDIR /app
 
-ENTRYPOINT ["python", "/app/container_measure.py"]
+ENTRYPOINT ["python", "-m", "lodevem.container_measure"]

@@ -51,40 +51,50 @@ def run_benchmark(model_path: str, warmup_runs: int, timed_runs: int, input_shap
     because PyTorch may allocate additional memory during inference
     (e.g. activation buffers, gradient buffers).
     """
-    import torch
+    try:
+        from lodevem.backends import get_backend
+    except ImportError as e:
+        return {"status": "error", "error": f"Missing dependency: {e}"}
 
     # --- Load model ---
-    model = torch.load(model_path, map_location="cpu", weights_only=False)
-    model.eval()
+    try:
+        backend = get_backend(model_path)
+    except Exception as e:
+        return {"status": "error", "error": f"Failed to load backend: {e}"}
 
     # --- Prepare input ---
-    shape_to_use = getattr(model, "expected_input_shape", input_shape)
-    dummy_input = torch.zeros(*shape_to_use)
+    try:
+        dummy_input = backend.generate_inputs(input_shape)
+    except Exception as e:
+        return {"status": "error", "error": f"Failed to generate inputs: {e}"}
 
     # --- Warmup passes ---
-    # PyTorch does lazy initialization — the first few inference calls
-    # are slower because it's setting up internal buffers.
-    # Warmup runs let us measure the "steady state" speed, not startup cost.
-    with torch.no_grad():
+    # The first few inference calls are slower because the backend may be
+    # setting up internal buffers. Warmup runs let us measure steady state.
+    try:
         for _ in range(warmup_runs):
-            _ = model(dummy_input)
+            _ = backend.execute(dummy_input)
+    except Exception as e:
+        return {"status": "error", "error": f"Inference failed during warmup: {e}"}
 
     # --- Timed runs ---
     latencies_ms = []
     peak_rss_kb = 0
 
-    with torch.no_grad():
+    try:
         for _ in range(timed_runs):
             rss_before = read_rss_kb()
 
             t_start = time.perf_counter()
-            _ = model(dummy_input)
+            _ = backend.execute(dummy_input)
             t_end = time.perf_counter()
 
             rss_after = read_rss_kb()
 
             latencies_ms.append((t_end - t_start) * 1000)
             peak_rss_kb = max(peak_rss_kb, rss_after)
+    except Exception as e:
+        return {"status": "error", "error": f"Inference failed during timed runs: {e}"}
 
     # Sort latencies to compute percentiles
     latencies_ms.sort()

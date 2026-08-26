@@ -31,7 +31,7 @@ from lodevem.profiles import DeviceProfile
 
 logger = logging.getLogger(__name__)
 
-DOCKER_IMAGE_NAME = "lodevem-benchmark:latest"
+DOCKER_IMAGE_NAME = "lodevem-pytorch-onnx:latest"
 # Build context = the lodevem package directory (contains Dockerfile + container_measure.py)
 # This works both when cloned from git AND when installed via pip
 DOCKER_BUILD_CONTEXT = Path(__file__).parent
