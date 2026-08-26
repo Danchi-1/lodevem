@@ -19,6 +19,19 @@ def _read_rss_kb() -> int:
         pass
     return 0
 
+def _get_peak_rss_kb() -> int:
+    """Get the true high-water mark of process RAM in KB using getrusage if available."""
+    try:
+        import resource
+        import sys
+        usage = resource.getrusage(resource.RUSAGE_SELF).ru_maxrss
+        # ru_maxrss is in KB on Linux, but bytes on macOS. We assume Linux (container).
+        if sys.platform != "darwin":
+            return usage
+        return usage // 1024
+    except ImportError:
+        return _read_rss_kb()
+
 
 class HuggingFaceBackend(BenchmarkBackend):
     """Backend adapter for Hugging Face Transformers models."""
@@ -83,8 +96,12 @@ class HuggingFaceBackend(BenchmarkBackend):
         import torch
         
         prompt = kwargs.get("prompt", None)
+        max_new_tokens = kwargs.get("max_new_tokens", 20)
 
         if self._is_causal_lm:
+            if shape and shape[0] > 1:
+                raise ValueError("Batch size > 1 is not supported for LLM TTFT/TPS metrics.")
+                
             if not prompt:
                 prompt = "The quick brown fox"
             if not self.tokenizer:
@@ -94,7 +111,23 @@ class HuggingFaceBackend(BenchmarkBackend):
             if self.tokenizer.pad_token_id is None:
                 self.tokenizer.pad_token_id = self.tokenizer.eos_token_id or 0
                 
-            inputs = self.tokenizer(prompt, return_tensors="pt")
+            # Determine prompt budget to avoid blowing up the context window
+            ctx_limit = getattr(self.model.config, "max_position_embeddings", None)
+            if ctx_limit is None:
+                ctx_limit = getattr(self.tokenizer, "model_max_length", 2048)
+                if ctx_limit > 100000: # Some tokenizers default to a massive int
+                    ctx_limit = 2048
+                    
+            available_prompt_tokens = ctx_limit - max_new_tokens
+            if available_prompt_tokens <= 0:
+                raise ValueError(f"max_new_tokens ({max_new_tokens}) exceeds model context limit ({ctx_limit}).")
+                
+            inputs = self.tokenizer(
+                prompt,
+                return_tensors="pt",
+                truncation=True,
+                max_length=available_prompt_tokens
+            )
             return inputs
             
         else:
@@ -125,19 +158,27 @@ class HuggingFaceBackend(BenchmarkBackend):
             raise ValueError("max_new_tokens must be positive.")
             
         input_ids = inputs["input_ids"]
+        if input_ids.shape[0] > 1:
+            raise ValueError("Batch size > 1 is not supported for LLM TTFT/TPS metrics.")
+            
+        attention_mask = inputs.get("attention_mask")
         prompt_length = input_ids.shape[-1]
         
         generated_tokens = 0
         peak_rss_kb = _read_rss_kb()
         
         # Prepare for generation loop
-        # We manually drive the forward pass to measure exact TTFT and TPS
         past_key_values = None
         current_input_ids = input_ids
         
-        eos_token_id = self.model.config.eos_token_id
-        if isinstance(eos_token_id, int):
-            eos_token_id = [eos_token_id]
+        # Normalize EOS configuration to a set
+        eos_token_id_cfg = self.model.config.eos_token_id
+        if eos_token_id_cfg is None:
+            eos_tokens = set()
+        elif isinstance(eos_token_id_cfg, int):
+            eos_tokens = {eos_token_id_cfg}
+        else:
+            eos_tokens = set(eos_token_id_cfg)
         
         ttft_ms = 0.0
         decode_time_ms = 0.0
@@ -147,16 +188,17 @@ class HuggingFaceBackend(BenchmarkBackend):
         
         with torch.no_grad():
             for i in range(max_new_tokens):
-                # Sample memory during loop
-                rss = _read_rss_kb()
-                if rss > peak_rss_kb:
-                    peak_rss_kb = rss
-                
                 outputs = self.model(
                     input_ids=current_input_ids,
+                    attention_mask=attention_mask,
                     past_key_values=past_key_values,
                     use_cache=True
                 )
+                
+                # Check memory immediately after forward pass
+                rss = _read_rss_kb()
+                if rss > peak_rss_kb:
+                    peak_rss_kb = rss
                 
                 past_key_values = outputs.past_key_values
                 next_token_logits = outputs.logits[:, -1, :]
@@ -170,19 +212,29 @@ class HuggingFaceBackend(BenchmarkBackend):
                 
                 generated_tokens += 1
                 
-                # Check EOS
-                if eos_token_id is not None and next_token.item() in eos_token_id:
+                # Check EOS (safe for batch_size=1)
+                if next_token.item() in eos_tokens:
                     break
                     
                 # Setup next iteration
                 current_input_ids = next_token
+                if attention_mask is not None:
+                    attention_mask = torch.cat(
+                        [attention_mask, torch.ones_like(attention_mask[:, :1])], dim=-1
+                    )
 
         t_end = time.perf_counter()
-        decode_time_ms = (t_end - t_first_token) * 1000
         
+        if generated_tokens > 0:
+            decode_time_ms = (t_end - t_first_token) * 1000
+            
         tps = None
-        if generated_tokens > 1:
+        if generated_tokens > 1 and decode_time_ms > 0:
             tps = (generated_tokens - 1) / (decode_time_ms / 1000.0)
+            
+        # Get true OS-reported high-water mark if possible
+        true_peak = _get_peak_rss_kb()
+        final_peak_kb = max(peak_rss_kb, true_peak)
             
         return {
             "ttft_ms": ttft_ms,
@@ -190,7 +242,7 @@ class HuggingFaceBackend(BenchmarkBackend):
             "tps": tps,
             "generated_tokens": generated_tokens,
             "prompt_length": prompt_length,
-            "peak_ram_mb": peak_rss_kb / 1024.0
+            "peak_ram_mb": final_peak_kb / 1024.0
         }
 
     def set_threads(self, num_threads: int) -> None:
