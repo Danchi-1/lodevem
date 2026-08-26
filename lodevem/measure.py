@@ -67,6 +67,8 @@ def _run_lite_subprocess(
     timed_runs: int,
     simulate_throttling: bool = False,
     input_shape: tuple[int, ...] = (1, 3, 224, 224),
+    prompt: str | None = None,
+    max_new_tokens: int = 20,
 ) -> dict:
     """Run the lite measurement in an isolated subprocess."""
     cmd = [
@@ -225,19 +227,19 @@ def measure_memory_lite(
         _ = backend.execute(dummy_input)
         t_end = time.perf_counter()
 
-        # Apply simulated thermal throttling if requested
         elapsed_ms = (t_end - t_start) * 1000
-        if simulate_throttling:
-            # After every 10 passes, reduce threads by 1 and increase latency multiplier
-            if i % 10 == 0:
-                current_threads = max(1, current_threads - 1)
-                backend.set_threads(current_threads)
-                throttle_multiplier *= 1.15
-            elapsed_ms *= throttle_multiplier
 
-            ram_mb = process.memory_info().rss / (1024 * 1024)
-            peak_ram_mb = max(peak_ram_mb, ram_mb)
-            latencies_ms.append(elapsed_ms)
+        # Apply simulated thermal throttling if requested
+        if simulate_throttling and i % 10 == 0:
+            current_threads = max(1, current_threads - 1)
+            backend.set_threads(current_threads)
+            throttle_multiplier *= 1.15
+
+        elapsed_ms *= throttle_multiplier
+
+        ram_mb = process.memory_info().rss / (1024 * 1024)
+        peak_ram_mb = max(peak_ram_mb, ram_mb)
+        latencies_ms.append(elapsed_ms)
 
     latencies_ms.sort()
     n = len(latencies_ms)

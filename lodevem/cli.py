@@ -239,6 +239,8 @@ def cmd_start(args: argparse.Namespace) -> None:
             simulate_throttling=getattr(args, "simulate_throttling", False),
             no_predict=getattr(args, "no_predict", False),
             input_shape=input_shape,
+            prompt=getattr(args, "prompt", None),
+            max_new_tokens=getattr(args, "max_new_tokens", 20),
         )
     except KeyboardInterrupt:
         console.print("\n[yellow]Benchmark interrupted by user.[/yellow]")

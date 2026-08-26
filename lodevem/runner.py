@@ -56,6 +56,11 @@ def _create_result_record(
     peak_ram_mb: float | None = None,
     measured_latency_ms: float | None = None,
     measured_p95_ms: float | None = None,
+    median_ttft_ms: float | None = None,
+    median_tps: float | None = None,
+    decode_time_ms: float | None = None,
+    generated_tokens: int | None = None,
+    prompt_length: int | None = None,
     error: str | None = None,
 ) -> dict:
     return {
@@ -75,6 +80,11 @@ def _create_result_record(
         "peak_ram_mb": peak_ram_mb,
         "measured_latency_ms": measured_latency_ms,
         "measured_p95_ms": measured_p95_ms,
+        "median_ttft_ms": median_ttft_ms,
+        "median_tps": median_tps,
+        "decode_time_ms": decode_time_ms,
+        "generated_tokens": generated_tokens,
+        "prompt_length": prompt_length,
         "fits_in_ram": fits_in_ram,
         "measure_status": measure_status,
         "error": error,
@@ -97,7 +107,7 @@ def run_benchmark(
     Run the full benchmark: all models × selected device profiles.
 
     Args:
-        model_paths:  List of .pt model file paths. Each file is one row group.
+        model_paths:  List of model file paths. Each file is one row group.
         profile_ids:  If provided, only benchmark against these specific profile IDs.
         tier:         If provided, only benchmark against profiles in this tier (1/2/3).
                       If neither profile_ids nor tier is given, all 16 profiles are used.
@@ -144,7 +154,36 @@ def run_benchmark(
             model_path = Path(model_path)
             model_label = model_path.name   # e.g. "cocoa_int8.pt"
 
-            # Load the model backend adapter (for latency prediction on host)
+            # --- Step 0: Pre-Flight Analysis (all profiles, before backend loading) ---
+            # Run preflight against every profile first. Only load the backend
+            # if at least one profile survives.
+            preflight_results = {}
+            any_runnable = False
+            for profile in device_profiles:
+                pf = PreFlightAnalyzer.analyze(model_path, profile.ram_mb)
+                preflight_results[profile.id] = pf
+                if pf["preflight_status"] != "preflight_oom":
+                    any_runnable = True
+
+            if not any_runnable:
+                # Every profile failed preflight — emit OOM records, skip backend loading
+                for profile in device_profiles:
+                    pf = preflight_results[profile.id]
+                    results.append(_create_result_record(
+                        model_label=model_label,
+                        model_size_mb=pf["model_size_mb"],
+                        profile=profile,
+                        preflight_status=pf["preflight_status"],
+                        preflight_reason=pf["preflight_reason"],
+                        estimated_memory_mb=pf["estimated_memory_mb"],
+                        measure_status="skipped (pre-flight oom)",
+                        fits_in_ram=False,
+                        error="Skipped due to pre-flight OOM estimate.",
+                    ))
+                    progress.advance(task)
+                continue
+
+            # --- Load the model backend adapter (for latency prediction on host) ---
             backend = None
             if not no_predict:
                 logger.info(f"Loading backend adapter for prediction: {model_label}")
@@ -152,7 +191,6 @@ def run_benchmark(
                     backend = get_backend(model_path)
                 except Exception as e:
                     logger.error(f"Failed to load backend for {model_label}: {e}")
-                    # If we can't load the backend, prediction must fail, but we can still try to measure it
                     pass
 
             for profile in device_profiles:
@@ -161,12 +199,11 @@ def run_benchmark(
                     description=f"{model_label} → {profile.name}"
                 )
 
-                # --- Step 0: Pre-Flight Analysis ---
-                preflight_result = PreFlightAnalyzer.analyze(model_path, profile.ram_mb)
-                model_size_mb = preflight_result["model_size_mb"]
-                estimated_memory_mb = preflight_result["estimated_memory_mb"]
-                preflight_status = preflight_result["preflight_status"]
-                preflight_reason = preflight_result["preflight_reason"]
+                pf = preflight_results[profile.id]
+                model_size_mb = pf["model_size_mb"]
+                estimated_memory_mb = pf["estimated_memory_mb"]
+                preflight_status = pf["preflight_status"]
+                preflight_reason = pf["preflight_reason"]
 
                 if preflight_status == "preflight_oom":
                     # Skip execution and return an immediate OOM record
@@ -201,7 +238,7 @@ def run_benchmark(
                         predicted_latency_ms = None
                         prediction_status = f"error: {e}"
 
-                # --- Step 2: Measure memory (Docker, runs in container) ---
+                # --- Step 2: Measure memory (Docker or Lite) ---
                 try:
                     mem_result = measure_memory(
                         model_path=model_path,
@@ -210,6 +247,8 @@ def run_benchmark(
                         timed_runs=timed_runs,
                         simulate_throttling=simulate_throttling,
                         input_shape=input_shape,
+                        prompt=prompt,
+                        max_new_tokens=max_new_tokens,
                     )
                 except Exception as e:
                     logger.error(f"Memory measurement failed for {profile.id}: {e}")
@@ -237,6 +276,11 @@ def run_benchmark(
                     peak_ram_mb=mem_result.get("peak_ram_mb"),
                     measured_latency_ms=mem_result.get("median_latency_ms"),
                     measured_p95_ms=mem_result.get("p95_latency_ms"),
+                    median_ttft_ms=mem_result.get("median_ttft_ms"),
+                    median_tps=mem_result.get("median_tps"),
+                    decode_time_ms=mem_result.get("decode_time_ms"),
+                    generated_tokens=mem_result.get("generated_tokens"),
+                    prompt_length=mem_result.get("prompt_length"),
                     error=mem_result.get("error"),
                 )
 
@@ -244,3 +288,4 @@ def run_benchmark(
                 progress.advance(task)
 
     return results
+

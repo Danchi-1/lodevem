@@ -79,9 +79,11 @@ class HuggingFaceBackend(BenchmarkBackend):
     def is_llm(self) -> bool:
         return self._is_causal_lm
 
-    def generate_inputs(self, shape: tuple[int, ...] | None = None, prompt: str | None = None) -> Any:
+    def generate_inputs(self, shape: tuple[int, ...] | None = None, **kwargs) -> Any:
         import torch
         
+        prompt = kwargs.get("prompt", None)
+
         if self._is_causal_lm:
             if not prompt:
                 prompt = "The quick brown fox"
