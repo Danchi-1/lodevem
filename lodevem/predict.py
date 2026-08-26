@@ -35,10 +35,7 @@ from __future__ import annotations
 
 import logging
 from pathlib import Path
-from typing import Optional
-
-import torch
-import torch.nn as nn
+from typing import Optional, Any
 
 from lodevem.profiles import DeviceProfile
 
@@ -80,7 +77,7 @@ def _try_import_nn_meter():
 
 
 def predict_latency(
-    model: nn.Module,
+    model: Any,
     profile: DeviceProfile,
     input_shape: tuple = (1, 3, 224, 224),
 ) -> dict:
@@ -143,7 +140,7 @@ def predict_latency(
     }
 
 
-def load_model(model_path: str | Path) -> nn.Module:
+def load_model(model_path: str | Path) -> Any:
     """
     Load a PyTorch model from a .pt or .pth file.
 
@@ -162,6 +159,12 @@ def load_model(model_path: str | Path) -> nn.Module:
         )
 
     logger.info(f"Loading model from: {model_path}")
+
+    try:
+        import torch
+        import torch.nn as nn
+    except ImportError as e:
+        raise ImportError(f"Missing dependency. Run: pip install 'lodevem[pytorch]'. Details: {e}") from e
 
     try:
         # Try loading as a full model first (most common case)

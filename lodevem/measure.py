@@ -100,7 +100,7 @@ def _run_lite_subprocess(
 
     data["mode"] = "lite"
     data["ram_limit_mb"] = profile.ram_mb
-    data["fits_in_ram"] = data.get("status") == "ok"
+    data["fits_in_ram"] = data.get("status") == "ok" and data.get("peak_ram_mb", float('inf')) <= profile.ram_mb
     return data
 
 
@@ -319,7 +319,7 @@ def measure_memory(
 
         raw_output = result.decode("utf-8").strip()
         data = json.loads(raw_output)
-        data["fits_in_ram"] = data.get("status") == "ok"
+        data["fits_in_ram"] = data.get("status") == "ok" and data.get("peak_ram_mb", float('inf')) <= profile.ram_mb
         data["ram_limit_mb"] = profile.ram_mb
         data["mode"] = "docker"
         return data
