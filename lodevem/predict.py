@@ -33,9 +33,11 @@ The scaling_factor:
 
 from __future__ import annotations
 
-import logging
 from pathlib import Path
 from typing import Optional, Any
+import pickle
+import sys
+import logging
 
 from lodevem.profiles import DeviceProfile
 
@@ -56,6 +58,99 @@ NN_METER_PREDICTOR = "cortexA76cpu_tflite21"
 
 # Cache the predictor so we don't load/download it 16 times per model
 _PREDICTOR_CACHE = {}
+
+
+class _SklearnCompatUnpickler(pickle.Unpickler):
+    """
+    Custom unpickler that intercepts scikit-learn's Tree class during nn-meter load
+    and dynamically injects a missing schema column (missing_go_to_left) to prevent
+    modern scikit-learn (1.3+) from crashing on the legacy 0.23 pickle.
+    """
+    def find_class(self, module: str, name: str) -> Any:
+        if module == "sklearn.tree._tree" and name == "Tree":
+            try:
+                import sklearn.tree._tree
+                from sklearn.tree._tree import NODE_DTYPE
+                import numpy as np
+
+                RealTree = sklearn.tree._tree.Tree
+
+                class PatchedTree(RealTree):
+                    def __setstate__(self, state):
+                        try:
+                            if isinstance(state, tuple):
+                                new_state = list(state)
+                                for i, item in enumerate(new_state):
+                                    if isinstance(item, np.ndarray) and item.dtype.names and 'left_child' in item.dtype.names:
+                                        if item.dtype != NODE_DTYPE:
+                                            new_nodes = np.zeros(item.shape, dtype=NODE_DTYPE)
+                                            for n in item.dtype.names:
+                                                if n in NODE_DTYPE.names:
+                                                    new_nodes[n] = item[n]
+                                            new_state[i] = new_nodes
+                                state = tuple(new_state)
+                            elif isinstance(state, dict):
+                                if 'nodes' in state:
+                                    item = state['nodes']
+                                    if item.dtype != NODE_DTYPE:
+                                        new_nodes = np.zeros(item.shape, dtype=NODE_DTYPE)
+                                        for n in item.dtype.names:
+                                            if n in NODE_DTYPE.names:
+                                                new_nodes[n] = item[n]
+                                        state['nodes'] = new_nodes
+                        except Exception as e:
+                            logger.debug(f"Failed to patch Tree state during unpickling: {e}")
+                            
+                        # Pass the patched (or unpatched if it failed) state down to the C-extension
+                        super().__setstate__(state)
+
+                return PatchedTree
+            except Exception as e:
+                logger.debug(f"Failed to setup PatchedTree: {e}")
+                
+        return super().find_class(module, name)
+
+
+class _PatchPickleContext:
+    """
+    Context manager to temporarily override the global pickle.load and joblib.load
+    to use our custom unpickler. All exceptions are safely suppressed.
+    """
+    def __enter__(self):
+        self.orig_pickle_load = pickle.load
+        
+        def patched_pickle_load(f, **kwargs):
+            return _SklearnCompatUnpickler(f, **kwargs).load()
+            
+        pickle.load = patched_pickle_load
+
+        # If nn-meter ends up using joblib, we need to patch its custom NumpyUnpickler
+        self.joblib_module = None
+        self.orig_joblib_find_class = None
+        try:
+            import joblib.numpy_pickle
+            if hasattr(joblib.numpy_pickle, "NumpyUnpickler"):
+                self.joblib_module = joblib.numpy_pickle
+                self.orig_joblib_find_class = self.joblib_module.NumpyUnpickler.find_class
+                
+                # We can't reuse _SklearnCompatUnpickler because joblib uses its own Unpickler inheritance,
+                # but we can monkey-patch its find_class method.
+                def patched_joblib_find_class(unpickler_self, module, name):
+                    if module == "sklearn.tree._tree" and name == "Tree":
+                        # Return the exact same PatchedTree logic via our custom unpickler
+                        return _SklearnCompatUnpickler(None).find_class(module, name)
+                    return self.orig_joblib_find_class(unpickler_self, module, name)
+                    
+                self.joblib_module.NumpyUnpickler.find_class = patched_joblib_find_class
+        except ImportError:
+            pass
+            
+        return self
+
+    def __exit__(self, exc_type, exc_val, exc_tb):
+        pickle.load = self.orig_pickle_load
+        if self.joblib_module and self.orig_joblib_find_class:
+            self.joblib_module.NumpyUnpickler.find_class = self.orig_joblib_find_class
 
 
 def _try_import_nn_meter():
@@ -112,7 +207,12 @@ def predict_latency(
             logger.warning("If you wish to skip this download, cancel and run with --no-predict (or no_predict=True).")
             
         logger.info(f"Loading nn-Meter predictor: {NN_METER_PREDICTOR}")
-        _PREDICTOR_CACHE[NN_METER_PREDICTOR] = load_latency_predictor(NN_METER_PREDICTOR)
+        try:
+            with _PatchPickleContext():
+                _PREDICTOR_CACHE[NN_METER_PREDICTOR] = load_latency_predictor(NN_METER_PREDICTOR)
+        except Exception as e:
+            logger.warning(f"Failed to load nn-meter predictor (scikit-learn incompatibility?): {e}")
+            raise
         
     predictor = _PREDICTOR_CACHE[NN_METER_PREDICTOR]
 
