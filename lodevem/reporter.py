@@ -199,3 +199,218 @@ def save_json(results: list[dict], output_path: str | Path | None = None) -> Pat
         json.dump(results, f, indent=2, default=str)
 
     return output_path
+
+
+def _format_count(val: int | None) -> str:
+    """Format parameter or element counts with unit suffixes."""
+    if val is None:
+        return "—"
+    if val >= 1_000_000_000:
+        return f"{val / 1_000_000_000:.2f}B"
+    if val >= 1_000_000:
+        return f"{val / 1_000_000:.2f}M"
+    if val >= 1_000:
+        return f"{val / 1_000:.1f}K"
+    return str(val)
+
+
+def _format_flops(flops: int | None, status: str) -> str:
+    """Format FLOPs value with status annotation."""
+    if status == "not_applicable":
+        return "[dim]N/A[/dim]"
+    if status == "unsupported_operators":
+        return "[yellow]unsupported[/yellow]"
+    if status == "partial":
+        if flops is not None:
+            return f"{_format_count(flops)} [yellow](partial)[/yellow]"
+        return "[yellow]partial[/yellow]"
+    if flops is None:
+        return "—"
+    if flops >= 1_000_000_000:
+        return f"{flops / 1_000_000_000:.2f} GFLOPs"
+    if flops >= 1_000_000:
+        return f"{flops / 1_000_000:.2f} MFLOPs"
+    return f"{flops} FLOPs"
+
+
+def print_footprint_scorecard(footprints: list[Any]) -> None:
+    """
+    Print rich scorecard tables detailing static model architecture, parameters,
+    memory footprint, and FLOPs.
+    """
+    # 1. Overview Table
+    overview_table = Table(
+        title="\n[bold cyan]lodevem Model Footprint Scorecard[/bold cyan]",
+        box=box.ROUNDED,
+        header_style="bold white",
+        border_style="dim",
+        row_styles=["", "dim"],
+    )
+    overview_table.add_column("Model File",      style="cyan",    min_width=18)
+    overview_table.add_column("Backend",         style="white",   min_width=12)
+    overview_table.add_column("Disk Size",       style="dim",     justify="right", min_width=10)
+    overview_table.add_column("Parameters",      style="green",   justify="right", min_width=12)
+    overview_table.add_column("Weights RAM",     style="magenta", justify="right", min_width=12)
+    overview_table.add_column("FLOPs / MACs",    style="yellow",  justify="right", min_width=15)
+    overview_table.add_column("FLOPs Status",    style="dim",     justify="center", min_width=12)
+    overview_table.add_column("Min RAM Est",     style="blue",    justify="right", min_width=12)
+
+    for fp in footprints:
+        params_str = (
+            _format_count(fp.total_parameters)
+            if fp.total_parameters is not None
+            else ("[dim]N/A (Tree)[/dim]" if fp.backend == "sklearn" else "—")
+        )
+        weights_ram_str = (
+            f"{fp.parameter_memory_mb:.1f} MB"
+            if fp.parameter_memory_mb is not None
+            else "—"
+        )
+        flops_str = _format_flops(fp.flops, fp.flops_status)
+        min_ram_str = (
+            f"~{fp.estimated_minimum_ram_mb:.0f} MB"
+            if fp.estimated_minimum_ram_mb
+            else "—"
+        )
+
+        overview_table.add_row(
+            fp.model_name,
+            fp.backend,
+            f"{fp.file_size_mb:.1f} MB",
+            params_str,
+            weights_ram_str,
+            flops_str,
+            fp.flops_status,
+            min_ram_str,
+        )
+
+    console.print(overview_table)
+
+    # 2. Precision Breakdown Table (if any model has precision details)
+    has_precision = any(fp.precision_breakdown for fp in footprints)
+    if has_precision:
+        prec_table = Table(
+            title="\n[bold cyan]Weight Precision Breakdown[/bold cyan]",
+            box=box.ROUNDED,
+            header_style="bold white",
+            border_style="dim",
+        )
+        prec_table.add_column("Model File", style="cyan", min_width=18)
+        all_dtypes = sorted(
+            list({dt for fp in footprints for dt in fp.precision_breakdown.keys()})
+        )
+        for dt in all_dtypes:
+            prec_table.add_column(dt, justify="right", min_width=10)
+
+        for fp in footprints:
+            if fp.precision_breakdown:
+                row = [fp.model_name]
+                for dt in all_dtypes:
+                    cnt = fp.precision_breakdown.get(dt)
+                    row.append(_format_count(cnt) if cnt else "—")
+                prec_table.add_row(*row)
+
+        console.print(prec_table)
+
+    # 3. LLM Architecture & KV-Cache Table (if any LLM models)
+    llm_models = [fp for fp in footprints if getattr(fp, "is_llm", False)]
+    if llm_models:
+        llm_table = Table(
+            title="\n[bold cyan]LLM Architecture & KV-Cache Footprint[/bold cyan]",
+            box=box.ROUNDED,
+            header_style="bold white",
+            border_style="dim",
+        )
+        llm_table.add_column("Model File",      style="cyan",    min_width=18)
+        llm_table.add_column("Ctx Window",      style="white",   justify="right", min_width=10)
+        llm_table.add_column("Layers",          style="dim",     justify="right", min_width=8)
+        llm_table.add_column("Attn Heads",      style="dim",     justify="right", min_width=10)
+        llm_table.add_column("KV Heads",        style="dim",     justify="right", min_width=10)
+        llm_table.add_column("KV/Token",        style="yellow",  justify="right", min_width=12)
+        llm_table.add_column("KV @ 512 ctx",    style="magenta", justify="right", min_width=12)
+        llm_table.add_column("KV @ 2048 ctx",   style="magenta", justify="right", min_width=12)
+
+        for fp in llm_models:
+            kv_token_str = (
+                f"{fp.kv_cache_bytes_per_token:.0f} B"
+                if fp.kv_cache_bytes_per_token is not None
+                else "—"
+            )
+            kv_512 = f"{fp.kv_cache_projections_mb.get(512):.1f} MB" if 512 in fp.kv_cache_projections_mb else "—"
+            kv_2048 = f"{fp.kv_cache_projections_mb.get(2048):.1f} MB" if 2048 in fp.kv_cache_projections_mb else "—"
+
+            llm_table.add_row(
+                fp.model_name,
+                str(fp.context_window) if fp.context_window else "—",
+                str(fp.num_layers) if fp.num_layers else "—",
+                str(fp.num_attention_heads) if fp.num_attention_heads else "—",
+                str(fp.num_key_value_heads) if fp.num_key_value_heads else "—",
+                kv_token_str,
+                kv_512,
+                kv_2048,
+            )
+
+        console.print(llm_table)
+
+    # 4. Scikit-Learn Estimator Table (if any sklearn models)
+    sklearn_models = [fp for fp in footprints if fp.backend == "sklearn"]
+    if sklearn_models:
+        sk_table = Table(
+            title="\n[bold cyan]Tree Estimator Breakdown (Scikit-Learn)[/bold cyan]",
+            box=box.ROUNDED,
+            header_style="bold white",
+            border_style="dim",
+        )
+        sk_table.add_column("Model File",      style="cyan",   min_width=18)
+        sk_table.add_column("Estimator",       style="white",  min_width=26)
+        sk_table.add_column("Trees",           style="green",  justify="right", min_width=8)
+        sk_table.add_column("Max Depth",       style="dim",    justify="right", min_width=10)
+        sk_table.add_column("Total Nodes",     style="yellow", justify="right", min_width=12)
+        sk_table.add_column("Features In",     style="dim",    justify="right", min_width=12)
+
+        for fp in sklearn_models:
+            sk_table.add_row(
+                fp.model_name,
+                fp.estimator_type or "—",
+                str(fp.n_estimators) if fp.n_estimators else "—",
+                str(fp.max_depth) if fp.max_depth else "None",
+                _format_count(fp.total_node_count) if fp.total_node_count else "—",
+                str(fp.n_features_in) if fp.n_features_in else "—",
+            )
+
+        console.print(sk_table)
+
+    # 5. Diagnostic GPU info (if requested)
+    gpu_models = [fp for fp in footprints if getattr(fp, "gpu_diagnostic_mode", False)]
+    if gpu_models:
+        console.print("\n[bold yellow]Diagnostic Host GPU Information:[/bold yellow]")
+        for fp in gpu_models:
+            gpus = fp.host_gpus_detected or ["None detected"]
+            console.print(f"  • [cyan]{fp.model_name}[/cyan]: {', '.join(gpus)}")
+
+    # 6. Warnings & Notes
+    all_warnings = [(fp.model_name, w) for fp in footprints for w in fp.warnings]
+    if all_warnings:
+        console.print("\n[bold yellow]Footprint Notes & Warnings:[/bold yellow]")
+        for mname, w in all_warnings:
+            console.print(f"  • [cyan]{mname}[/cyan]: {w}")
+    console.print()
+
+
+def save_footprint_json(footprints: list[Any], output_path: str | Path | None = None) -> Path:
+    """Save model footprints to a JSON file."""
+    RESULTS_DIR.mkdir(exist_ok=True)
+
+    if output_path is None:
+        timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
+        output_path = RESULTS_DIR / f"footprint_{timestamp}.json"
+
+    output_path = Path(output_path)
+
+    data = [fp.to_dict() if hasattr(fp, "to_dict") else fp for fp in footprints]
+    with open(output_path, "w", encoding="utf-8") as f:
+        json.dump(data, f, indent=2, default=str)
+
+    console.print(f"[dim]Footprint JSON saved → [cyan]{output_path}[/cyan][/dim]")
+    return output_path
+
