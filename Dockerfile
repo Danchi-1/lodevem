@@ -34,11 +34,26 @@ RUN pip install --no-cache-dir \
     torchvision==0.18.0+cpu \
     --index-url https://download.pytorch.org/whl/cpu
 
+# Install backend dependencies for Scikit-Learn, ONNX, and Hugging Face parity
+RUN pip install --no-cache-dir \
+    scikit-learn \
+    joblib \
+    hummingbird-ml \
+    onnxruntime \
+    transformers
+
+RUN mkdir -p /models /app
+
 # Copy only the measurement script into the container.
 # The model file gets mounted as a volume at runtime (see measure.py).
 COPY lodevem/container_measure.py /app/container_measure.py
 
-WORKDIR /app
+# Create an unprivileged non-root user and group
+RUN groupadd -g 10001 lodevem && \
+    useradd -u 10001 -g lodevem -s /bin/false -m lodevem && \
+    chmod -R 755 /app /models
+
+USER 10001:10001
 
 # The entry point runs the measurement script with the model path as argument.
 # Example: docker run ... benchmark_runner /models/cocoa_int8.pt 50
