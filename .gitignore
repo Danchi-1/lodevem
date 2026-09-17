@@ -231,3 +231,6 @@ results/*.html
 
 # Compressed model variants generated during a run
 models/compressed/
+
+# Lodevem footprint and model cache
+.lodevem_cache/
