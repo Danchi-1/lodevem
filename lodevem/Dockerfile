@@ -24,6 +24,14 @@ RUN pip install --no-cache-dir \
 # Copy the entire lodevem package so container_measure can access lodevem.backends
 COPY . /app/lodevem
 
+# Create an unprivileged non-root user and group
+RUN groupadd -g 10001 lodevem && \
+    useradd -u 10001 -g lodevem -s /bin/false -m lodevem && \
+    mkdir -p /models /app && \
+    chmod -R 755 /app /models
+
 WORKDIR /app
+
+USER 10001:10001
 
 ENTRYPOINT ["python", "-m", "lodevem.container_measure"]
