@@ -22,9 +22,14 @@ it runs standalone inside the container where lodevem isn't installed.
 """
 
 import json
+import os
 import sys
 import time
 import traceback
+
+os.environ["CUDA_VISIBLE_DEVICES"] = ""
+os.environ["ROCR_VISIBLE_DEVICES"] = ""
+os.environ["HIP_VISIBLE_DEVICES"] = ""
 
 
 def read_rss_kb() -> int:
@@ -43,14 +48,22 @@ def read_rss_kb() -> int:
     return 0
 
 
-def run_benchmark(model_path: str, warmup_runs: int, timed_runs: int, input_shape: tuple[int, ...], prompt: str | None = None, max_new_tokens: int = 20) -> dict:
+def run_benchmark(
+    model_path: str,
+    warmup_runs: int,
+    timed_runs: int,
+    input_shape: tuple[int, ...],
+    prompt: str | None = None,
+    max_new_tokens: int = 20,
+    allow_untrusted: bool = False,
+) -> dict:
     try:
         from lodevem.backends import get_backend
     except ImportError as e:
         return {"status": "error", "error": f"Missing dependency: {e}"}
 
     try:
-        backend = get_backend(model_path)
+        backend = get_backend(model_path, allow_untrusted=allow_untrusted)
     except Exception as e:
         return {"status": "error", "error": f"Failed to load backend: {e}"}
 
@@ -137,12 +150,21 @@ if __name__ == "__main__":
     parser.add_argument("input_shape_str", nargs="?", default="1,3,224,224")
     parser.add_argument("--prompt", type=str, default=None)
     parser.add_argument("--max-new-tokens", type=int, default=20)
+    parser.add_argument("--dangerously-allow-untrusted-model", action="store_true", default=False)
     args = parser.parse_args()
 
     input_shape = tuple(map(int, args.input_shape_str.split(",")))
 
     try:
-        result = run_benchmark(args.model_path, args.warmup_runs, args.timed_runs, input_shape, args.prompt, args.max_new_tokens)
+        result = run_benchmark(
+            args.model_path,
+            args.warmup_runs,
+            args.timed_runs,
+            input_shape,
+            args.prompt,
+            args.max_new_tokens,
+            allow_untrusted=args.dangerously_allow_untrusted_model,
+        )
     except MemoryError:
         result = {
             "status": "oom",
