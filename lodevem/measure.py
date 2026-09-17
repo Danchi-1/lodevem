@@ -69,6 +69,7 @@ def _run_lite_subprocess(
     input_shape: tuple[int, ...] = (1, 3, 224, 224),
     prompt: str | None = None,
     max_new_tokens: int = 20,
+    allow_untrusted: bool = False,
 ) -> dict:
     """Run the lite measurement in an isolated subprocess."""
     cmd = [
@@ -88,8 +89,12 @@ def _run_lite_subprocess(
     if prompt:
         cmd.extend(["--prompt", prompt])
     cmd.extend(["--max-new-tokens", str(max_new_tokens)])
+    if allow_untrusted:
+        cmd.append("--dangerously-allow-untrusted-model")
 
-    completed = subprocess.run(cmd, capture_output=True, text=True)
+    from lodevem.guards import get_cpu_isolated_env
+
+    completed = subprocess.run(cmd, capture_output=True, text=True, env=get_cpu_isolated_env())
     if completed.returncode != 0:
         raise RuntimeError(
             "Lite worker failed: "
@@ -118,6 +123,7 @@ def measure_memory_lite(
     input_shape: tuple[int, ...] = (1, 3, 224, 224),
     prompt: str | None = None,
     max_new_tokens: int = 20,
+    allow_untrusted: bool = False,
 ) -> dict:
     """
     Measure memory using an isolated worker process — no Docker required.
@@ -131,7 +137,17 @@ def measure_memory_lite(
     measurement.
     """
     try:
-        return _run_lite_subprocess(model_path, profile, warmup_runs, timed_runs, simulate_throttling, input_shape, prompt, max_new_tokens)
+        return _run_lite_subprocess(
+            model_path,
+            profile,
+            warmup_runs,
+            timed_runs,
+            simulate_throttling,
+            input_shape,
+            prompt,
+            max_new_tokens,
+            allow_untrusted=allow_untrusted,
+        )
     except Exception as e:
         logger.warning(
             "Lite subprocess worker unavailable, falling back to in-process lite mode: %s",
@@ -148,7 +164,7 @@ def measure_memory_lite(
     process = psutil.Process(os.getpid())
 
     try:
-        backend = get_backend(model_path)
+        backend = get_backend(model_path, allow_untrusted=allow_untrusted)
     except Exception as e:
         return {"status": "error", "error": f"Failed to load backend: {e}"}
 
@@ -322,6 +338,7 @@ def measure_memory(
     input_shape: tuple[int, ...] = (1, 3, 224, 224),
     prompt: str | None = None,
     max_new_tokens: int = 20,
+    allow_untrusted: bool = False,
 ) -> dict:
     """
     Measure peak RAM and latency — automatically chooses the right mode.
@@ -343,7 +360,17 @@ def measure_memory(
                 "  For exact container enforcement, run on a Linux machine with Docker.\n"
             )
             _lite_mode_noticed = True
-        return measure_memory_lite(model_path, profile, warmup_runs, timed_runs, simulate_throttling, input_shape, prompt, max_new_tokens)
+        return measure_memory_lite(
+            model_path,
+            profile,
+            warmup_runs,
+            timed_runs,
+            simulate_throttling,
+            input_shape,
+            prompt,
+            max_new_tokens,
+            allow_untrusted=allow_untrusted,
+        )
 
     # --- Full Docker mode ---
     client = _get_docker_client()
@@ -352,7 +379,12 @@ def measure_memory(
     if not model_path.exists():
         raise FileNotFoundError(f"Model file not found: {model_path}")
 
-    container_model_path = f"/models/{model_path.name}"
+    if model_path.is_file():
+        container_model_path = f"/models/{model_path.name}"
+        volumes = {str(model_path): {"bind": container_model_path, "mode": "ro"}}
+    else:
+        container_model_path = "/models"
+        volumes = {str(model_path): {"bind": "/models", "mode": "ro"}}
 
     logger.info(
         f"  Running in container: {profile.name} "
@@ -369,16 +401,28 @@ def measure_memory(
         ]
         if prompt:
             cmd_args.extend(["--prompt", prompt])
+        if allow_untrusted:
+            cmd_args.append("--dangerously-allow-untrusted-model")
+
+        fsize_bytes = 2 * 1024 * 1024 * 1024
+        ulimits = [{"name": "fsize", "soft": fsize_bytes, "hard": fsize_bytes}]
 
         result = client.containers.run(
             image=DOCKER_IMAGE_NAME,
             command=cmd_args,
-            volumes={
-                str(model_path.parent): {"bind": "/models", "mode": "ro"}
-            },
+            volumes=volumes,
+            network_mode="none",
             mem_limit=f"{profile.ram_mb}m",
             memswap_limit=f"{profile.ram_mb}m",
             nano_cpus=int(profile.cores * 1e9),
+            read_only=True,
+            cap_drop=["ALL"],
+            security_opt=["no-new-privileges:true"],
+            pids_limit=100,
+            tmpfs={"/tmp": "size=64m,noexec,nosuid,nodev"},
+            user="10001:10001",
+            ulimits=ulimits,
+            environment={"LODEVEM_IN_DOCKER": "1"},
             remove=True,
             stdout=True,
             stderr=False,
@@ -436,6 +480,7 @@ def _lite_worker(
     input_shape: tuple[int, ...] = (1, 3, 224, 224),
     prompt: str | None = None,
     max_new_tokens: int = 20,
+    allow_untrusted: bool = False,
 ) -> None:
     import json
     import time
@@ -448,7 +493,7 @@ def _lite_worker(
         sys.exit(1)
 
     try:
-        backend = get_backend(model_path)
+        backend = get_backend(model_path, allow_untrusted=allow_untrusted)
     except Exception as e:
         print(json.dumps({"status": "error", "error": f"Failed to load backend: {e}"}))
         sys.exit(1)
@@ -572,9 +617,18 @@ if __name__ == "__main__":
     parser.add_argument("input_shape_str", nargs="?", default="1,3,224,224", help="Input shape as comma-separated integers")
     parser.add_argument("--prompt", type=str, default=None, help="Prompt for LLM generation")
     parser.add_argument("--max-new-tokens", type=int, default=20, help="Max tokens to generate")
+    parser.add_argument(
+        "--dangerously-allow-untrusted-model",
+        action="store_true",
+        default=False,
+        help="Explicitly allow loading untrusted model formats in Lite mode",
+    )
     args = parser.parse_args()
 
     if args.lite_worker:
+        from lodevem.guards import isolate_cpu_pre_import
+        isolate_cpu_pre_import()
+
         if not args.model_path or args.ram_limit_mb is None or args.num_threads is None or args.warmup_runs is None or args.timed_runs is None:
             print(json.dumps({"status": "error", "error": "Missing lite worker arguments"}))
             sys.exit(1)
@@ -595,6 +649,7 @@ if __name__ == "__main__":
             input_shape=input_shape,
             prompt=args.prompt,
             max_new_tokens=args.max_new_tokens,
+            allow_untrusted=args.dangerously_allow_untrusted_model,
         )
     else:
         parser.print_help()
