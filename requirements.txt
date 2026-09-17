@@ -18,6 +18,26 @@ rich>=13.0
 # Results handling
 pandas>=2.0
 
+# Scikit-Learn backend & Tree Profiler
+# Install with: pip install 'lodevem[sklearn]'
+scikit-learn>=1.0
+joblib>=1.3
+hummingbird-ml>=0.4
+
+# ONNX backend & Graph Profiler
+# Install with: pip install 'lodevem[onnx]'
+onnxruntime>=1.15
+onnx>=1.14
+
+# Hugging Face backend & LLM Profiler
+# Install with: pip install 'lodevem[hf]'
+transformers>=4.0
+accelerate>=0.20
+
+# Testing
+pytest>=7.0
+
 # Docker control (optional — only needed for full OOM detection mode)
-# Install with: pip install lodevem[docker]
+# Install with: pip install 'lodevem[docker]'
 # docker>=7.0
+
