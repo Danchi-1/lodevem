@@ -22,7 +22,7 @@ class BenchmarkBackend(abc.ABC):
 
     @classmethod
     @abc.abstractmethod
-    def load(cls, path: str | Path) -> BenchmarkBackend:
+    def load(cls, path: str | Path, allow_untrusted: bool = False) -> BenchmarkBackend:
         """
         Load the model and return an initialized backend adapter instance.
         """
