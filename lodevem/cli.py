@@ -28,6 +28,8 @@ from rich.console import Console
 from rich.table import Table
 from rich import box
 
+from lodevem.security import validate_input_shape
+
 console = Console()
 
 
@@ -204,9 +206,55 @@ def cmd_start(args: argparse.Namespace) -> None:
         if not path.exists():
             console.print(f"[red]Model file not found: {path}[/red]")
             sys.exit(1)
-        if path.suffix not in (".pt", ".pth"):
-            console.print(f"[yellow]Warning: '{path.name}' doesn't look like a PyTorch model (.pt/.pth)[/yellow]")
+        supported_suffixes = (".pt", ".pth", ".onnx", ".pkl", ".joblib", ".safetensors")
+        if path.suffix not in supported_suffixes and not (path.is_dir() and (path / "config.json").exists()):
+            console.print(f"[yellow]Warning: '{path.name}' may not be a supported model format.[/yellow]")
         model_paths.append(path)
+
+    # --- Check GPU guardrails ---
+    use_gpu = getattr(args, "use_gpu", False)
+    allow_invalid_mobile_gpu = getattr(args, "allow_invalid_mobile_gpu", False)
+    if use_gpu:
+        if not allow_invalid_mobile_gpu:
+            console.print(
+                "[bold red]Error: '--use-gpu' cannot be used with 'lodevem start'.[/bold red]\n"
+                "Simulated device benchmarks are strictly calibrated for mobile CPUs (Cortex-A53/A55/A7).\n"
+                "To benchmark a host GPU baseline for diagnostic comparison, you must explicitly pass:\n"
+                "  --allow-invalid-mobile-gpu\n"
+            )
+            sys.exit(1)
+        else:
+            console.print(
+                "[bold yellow][HOST-GPU-BASELINE WARNING][/bold yellow] Running benchmark on host GPU.\n"
+                "Simulated mobile CPU latency and throttling models are NOT valid for this run.\n"
+            )
+
+    try:
+        raw_shape = tuple(map(int, getattr(args, "input_shape", "1,3,224,224").split(",")))
+        input_shape = validate_input_shape(raw_shape)
+    except (ValueError, TypeError) as err:
+        console.print(f"[red]Invalid --input-shape: {err}[/red]")
+        sys.exit(1)
+
+    # --- Footprint Scorecard (if --footprint requested) ---
+    footprints = []
+    if getattr(args, "footprint", False):
+        from lodevem.footprint import analyze_footprint
+
+        allow_untrusted = getattr(args, "dangerously_allow_untrusted_model", False)
+        for p in model_paths:
+            try:
+                fp = analyze_footprint(
+                    p,
+                    input_shape=input_shape,
+                    use_gpu=use_gpu,
+                    allow_untrusted=allow_untrusted,
+                )
+                footprints.append(fp)
+            except Exception as fp_err:
+                console.print(f"[yellow]Warning: Could not analyze footprint for {p.name}: {fp_err}[/yellow]")
+        if footprints:
+            reporter.print_footprint_scorecard(footprints)
 
     # --- Determine profile filter ---
     profile_ids = None
@@ -222,13 +270,8 @@ def cmd_start(args: argparse.Namespace) -> None:
     console.print(f"[dim]Models: {[p.name for p in model_paths]}[/dim]")
     console.print(f"[dim]Warmup: {args.warmup} runs  |  Timed: {args.runs} runs[/dim]\n")
 
-    try:
-        input_shape = tuple(map(int, getattr(args, "input_shape", "1,3,224,224").split(",")))
-    except ValueError:
-        console.print("[red]Invalid --input-shape format. Use comma-separated integers (e.g. 1,1,360).[/red]")
-        sys.exit(1)
-
     # --- Run ---
+    allow_untrusted = getattr(args, "dangerously_allow_untrusted_model", False)
     try:
         results = runner.run_benchmark(
             model_paths=model_paths,
@@ -241,12 +284,17 @@ def cmd_start(args: argparse.Namespace) -> None:
             input_shape=input_shape,
             prompt=getattr(args, "prompt", None),
             max_new_tokens=getattr(args, "max_new_tokens", 20),
+            allow_untrusted=allow_untrusted,
         )
     except KeyboardInterrupt:
         console.print("\n[yellow]Benchmark interrupted by user.[/yellow]")
         sys.exit(0)
     except Exception as e:
-        console.print(f"\n[red]Benchmark failed: {e}[/red]")
+        from lodevem.security import SecurityPolicyError
+        if isinstance(e, SecurityPolicyError):
+            console.print(f"\n[bold red][SECURITY POLICY BLOCKED][/bold red]\n{e}\n")
+        else:
+            console.print(f"\n[red]Benchmark failed: {e}[/red]")
         if args.verbose:
             import traceback
             traceback.print_exc()
@@ -259,6 +307,66 @@ def cmd_start(args: argparse.Namespace) -> None:
     output_path = args.output if args.output else None
     reporter.save_csv(results, output_path)
     reporter.save_json(results)
+
+
+# ---------------------------------------------------------------------------
+# Subcommand: lodevem footprint
+# ---------------------------------------------------------------------------
+
+def cmd_footprint(args: argparse.Namespace) -> None:
+    """
+    Analyze static model footprint: parameters, weight memory, precision, and FLOPs.
+    """
+    from lodevem.footprint import analyze_footprint
+    from lodevem import reporter
+
+    model_paths = []
+    for path_str in args.models:
+        path = Path(path_str)
+        if not path.exists():
+            console.print(f"[red]Model file not found: {path}[/red]")
+            sys.exit(1)
+        model_paths.append(path)
+
+    input_shape = None
+    if getattr(args, "input_shape", None):
+        try:
+            raw_shape = tuple(map(int, args.input_shape.split(",")))
+            input_shape = validate_input_shape(raw_shape)
+        except (ValueError, TypeError) as err:
+            console.print(f"[red]Invalid --input-shape: {err}[/red]")
+            sys.exit(1)
+
+    console.print(f"\n[bold cyan]lodevem footprint[/bold cyan] — Profiling model architecture & resource limits")
+    console.print(f"[dim]Models: {[p.name for p in model_paths]}[/dim]\n")
+
+    footprints = []
+    allow_untrusted = getattr(args, "dangerously_allow_untrusted_model", False)
+    for p in model_paths:
+        try:
+            fp = analyze_footprint(
+                p,
+                input_shape=input_shape,
+                use_gpu=getattr(args, "use_gpu", False),
+                use_cache=not getattr(args, "no_cache", False),
+                allow_untrusted=allow_untrusted,
+            )
+            footprints.append(fp)
+        except Exception as e:
+            from lodevem.security import SecurityPolicyError
+            if isinstance(e, SecurityPolicyError):
+                console.print(f"\n[bold red][SECURITY POLICY BLOCKED][/bold red]\n{e}\n")
+            else:
+                console.print(f"[bold red]Failed to analyze '{p.name}':[/bold red] {e}")
+            if args.verbose:
+                import traceback
+                traceback.print_exc()
+            sys.exit(1)
+
+    reporter.print_footprint_scorecard(footprints)
+
+    if getattr(args, "json", None):
+        reporter.save_footprint_json(footprints, args.json)
 
 
 # ---------------------------------------------------------------------------
@@ -354,7 +462,67 @@ examples:
         metavar="N",
         help="Max tokens to generate for LLM benchmarking (default: 20)",
     )
+    start_parser.add_argument(
+        "--footprint",
+        action="store_true",
+        help="Display static model architecture and resource footprint before benchmarking",
+    )
+    start_parser.add_argument(
+        "--use-gpu",
+        action="store_true",
+        help="Attempt GPU execution (diagnostic host baseline)",
+    )
+    start_parser.add_argument(
+        "--allow-invalid-mobile-gpu",
+        action="store_true",
+        help="Explicit override allowing GPU execution for host comparison baseline",
+    )
+    start_parser.add_argument(
+        "--dangerously-allow-untrusted-model",
+        action="store_true",
+        default=False,
+        help="Explicitly permit loading untrusted pickle models or TorchScript without container sandboxing in Lite mode",
+    )
     start_parser.set_defaults(func=cmd_start)
+
+    # --- footprint ---
+    footprint_parser = subparsers.add_parser(
+        "footprint",
+        help="Analyze static memory, parameters, and FLOPs footprint of models",
+    )
+    footprint_parser.add_argument(
+        "models",
+        nargs="+",
+        metavar="MODEL",
+        help="One or more model files or directories to profile",
+    )
+    footprint_parser.add_argument(
+        "--input-shape",
+        default=None,
+        help="Target input tensor shape as comma-separated integers (e.g. 1,3,224,224)",
+    )
+    footprint_parser.add_argument(
+        "--json",
+        metavar="PATH",
+        help="Save footprint analysis scorecard to a JSON file",
+    )
+    footprint_parser.add_argument(
+        "--use-gpu",
+        action="store_true",
+        help="Enable diagnostic host GPU detection and profiling baseline",
+    )
+    footprint_parser.add_argument(
+        "--no-cache",
+        action="store_true",
+        help="Bypass footprint disk cache and re-run analysis",
+    )
+    footprint_parser.add_argument(
+        "--dangerously-allow-untrusted-model",
+        action="store_true",
+        default=False,
+        help="Explicitly permit loading untrusted pickle models or TorchScript without container sandboxing in Lite mode",
+    )
+    footprint_parser.set_defaults(func=cmd_footprint)
 
     # --- list ---
     list_parser = subparsers.add_parser(
