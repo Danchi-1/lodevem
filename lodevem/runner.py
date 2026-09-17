@@ -102,6 +102,7 @@ def run_benchmark(
     input_shape: tuple[int, ...] = (1, 3, 224, 224),
     prompt: str | None = None,
     max_new_tokens: int = 20,
+    allow_untrusted: bool = False,
 ) -> list[dict]:
     """
     Run the full benchmark: all models × selected device profiles.
@@ -113,6 +114,7 @@ def run_benchmark(
                       If neither profile_ids nor tier is given, all 16 profiles are used.
         warmup_runs:  Warmup inference passes inside the container.
         timed_runs:   Timed inference passes inside the container.
+        allow_untrusted: If True, explicitly allow loading untrusted models on the host.
 
     Returns:
         A list of result dicts — one per (model × profile) combination.
@@ -184,14 +186,36 @@ def run_benchmark(
                 continue
 
             # --- Load the model backend adapter (for latency prediction on host) ---
+            # Unsafe model formats (pickle-based .pt, .joblib, TorchScript) MUST NEVER be loaded
+            # on the host without explicit acknowledgment. If Docker is available, skip host prediction;
+            # if running in Lite mode without acknowledgment, raise SecurityPolicyError.
             backend = None
+            from lodevem.security import is_host_safe_format, SecurityPolicyError
+            is_safe = is_host_safe_format(model_path)
+
             if not no_predict:
-                logger.info(f"Loading backend adapter for prediction: {model_label}")
-                try:
-                    backend = get_backend(model_path)
-                except Exception as e:
-                    logger.error(f"Failed to load backend for {model_label}: {e}")
-                    pass
+                if not is_safe and not allow_untrusted:
+                    if _docker_available():
+                        logger.info(
+                            f"Skipping host latency prediction for untrusted format '{model_label}'. "
+                            "Benchmark will execute safely within isolated Docker container."
+                        )
+                    else:
+                        raise SecurityPolicyError(
+                            f"Security Policy Violation: Model '{model_label}' uses an unsafe or unverified format.\n"
+                            "Loading this model in Lite Mode executes arbitrary code on your host machine without container sandboxing.\n\n"
+                            "Remediation Options:\n"
+                            "  1. Run with Docker for automated sandbox confinement (recommended).\n"
+                            "  2. Convert model to ONNX or Safetensors (safe, pickle-free formats).\n"
+                            "  3. If you completely trust this model file, re-run with: --dangerously-allow-untrusted-model"
+                        )
+                else:
+                    logger.info(f"Loading backend adapter for prediction: {model_label}")
+                    try:
+                        backend = get_backend(model_path, allow_untrusted=allow_untrusted)
+                    except Exception as e:
+                        logger.error(f"Failed to load backend for {model_label}: {e}")
+                        pass
 
             for profile in device_profiles:
                 progress.update(
@@ -224,7 +248,12 @@ def run_benchmark(
                 # --- Step 1: Predict latency (nn-Meter, runs on host) ---
                 if no_predict or backend is None:
                     predicted_latency_ms = None
-                    prediction_status = "skipped (no backend)" if backend is None and not no_predict else "skipped"
+                    if not is_safe and not allow_untrusted:
+                        prediction_status = "skipped (untrusted format on host)"
+                    elif backend is None and not no_predict:
+                        prediction_status = "skipped (no backend)"
+                    else:
+                        prediction_status = "skipped"
                 elif backend.is_llm():
                     predicted_latency_ms = None
                     prediction_status = "unsupported (llm)"
@@ -249,6 +278,7 @@ def run_benchmark(
                         input_shape=input_shape,
                         prompt=prompt,
                         max_new_tokens=max_new_tokens,
+                        allow_untrusted=allow_untrusted,
                     )
                 except Exception as e:
                     logger.error(f"Memory measurement failed for {profile.id}: {e}")
