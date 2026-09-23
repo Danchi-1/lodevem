@@ -40,6 +40,8 @@ Latency Prediction    RAM Measurement
    (console + CSV file)
 ```
 
+**New in 0.3.0:** Static Model Footprint Profiling (`lodevem footprint`), hardened Docker container sandboxing, deep ONNX & Safetensors validation, and explicit security policies for untrusted models.
+
 **New in 0.2.0:** Full support for Large Language Models (LLMs) via Hugging Face. Automatically measures Time-To-First-Token (TTFT) and Tokens-Per-Second (TPS) on simulated budget devices.
 
 ### Two measurement modes — selected automatically
@@ -146,6 +148,41 @@ This bypasses nn-Meter and runs a true autoregressive KV-cache simulation inside
 - **TTFT (Time-To-First-Token)**
 - **TPS (Tokens-Per-Second)**
 - True peak RAM (capturing KV-cache high water marks)
+
+### Static Model Footprint & Resource Profiling (New in v0.3.0)
+
+Inspect parameters, precision breakdown, weights memory, and FLOPs without target hardware or executing full benchmarks:
+
+```bash
+lodevem footprint models/cocoa_int8.pt models/resnet50.onnx models/llama-7b/
+```
+
+- **PyTorch**: Counts exact total and trainable parameters, persistent buffers, precision breakdown, and FLOPs/MACs.
+- **Hugging Face / LLMs**: Computes context window limits, KV-cache memory per token, and projections at 512, 1024, 2048, and 4096 context lengths.
+- **ONNX**: Analyzes input/output tensors, graph initializers, and precision without loading external weights.
+- **Scikit-Learn**: Profiles tree depths, total node counts, and estimators for Decision Trees and Random Forests.
+
+Display footprint scorecards immediately before benchmarking:
+```bash
+lodevem start models/cocoa_int8.pt --footprint
+```
+
+Export footprint results directly to JSON:
+```bash
+lodevem footprint models/cocoa_int8.pt --json results/footprint.json
+```
+
+### Security Architecture & Sandboxing Policies (New in v0.3.0)
+
+To protect your workstation against arbitrary code execution when analyzing untrusted models from external sources:
+
+- **Host Prediction Gate**: Pickle-based models (`.pt`, `.pkl`, `.joblib`) and TorchScript are never loaded on the host for latency prediction without explicit authorization.
+- **Hardened Docker Sandboxing**: In container mode, benchmarks execute with `read_only=True`, `cap_drop=["ALL"]`, `security_opt=["no-new-privileges:true"]`, `network_mode="none"`, non-root user (`10001:10001`), and tmpfs scratch space.
+- **Memory-Safe Formats**: **ONNX** and **Safetensors** are validated and safe for inspection and host prediction by default.
+- **Explicit Opt-in for Lite Mode**: In Lite Mode, if you fully trust a model and wish to execute it on your host without container sandboxing, pass:
+  ```bash
+  lodevem start untrusted_model.pt --dangerously-allow-untrusted-model
+  ```
 
 ### Fast Memory Checks / Skipping Latency
 
@@ -289,7 +326,7 @@ For **LLMs**, nn-Meter is bypassed and true Token-level metrics (TTFT, TPS) are 
 
 ### Suggested paper methods statement
 
-> *Hardware simulation was performed using lodevem v0.2.0 [cite], which predicts inference latency via nn-Meter [cite] and measures memory footprint under psutil/Docker RAM constraints matching each target device profile. All results are reproducible via `pip install lodevem`.*
+> *Hardware simulation was performed using lodevem v0.3.0 [cite], which predicts inference latency via nn-Meter [cite] and measures memory footprint under psutil/Docker RAM constraints matching each target device profile. All results are reproducible via `pip install lodevem`.*
 
 ---
 
